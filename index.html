@@ -1,1 +1,137 @@
-Hello there!
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cursor for Writers</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <!-- Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Left Sidebar (File Explorer) -->
+        <aside class="sidebar-left">
+            <div class="sidebar-header">
+                <h2>Explorer</h2>
+                <button id="new-file-btn" class="icon-btn" title="New File"><i data-lucide="file-plus"></i></button>
+            </div>
+            <div class="file-list" id="file-list">
+                <!-- File items will go here -->
+            </div>
+        </aside>
+
+        <!-- Main Content (Editor) -->
+        <main class="main-content">
+            <header class="editor-toolbar">
+                <div class="toolbar-group">
+                    <button class="format-btn" data-command="bold" title="Bold (Cmd+B)"><i
+                            data-lucide="bold"></i></button>
+                    <button class="format-btn" data-command="italic" title="Italic (Cmd+I)"><i
+                            data-lucide="italic"></i></button>
+                    <button class="format-btn" data-command="underline" title="Underline (Cmd+U)"><i
+                            data-lucide="underline"></i></button>
+                </div>
+                <div class="toolbar-divider"></div>
+                <div class="toolbar-group">
+                    <button class="format-btn" data-command="formatBlock" data-value="H1" title="Heading 1"><i
+                            data-lucide="heading-1"></i></button>
+                    <button class="format-btn" data-command="formatBlock" data-value="H2" title="Heading 2"><i
+                            data-lucide="heading-2"></i></button>
+                    <button class="format-btn" data-command="formatBlock" data-value="P" title="Paragraph"><i
+                            data-lucide="pilcrow"></i></button>
+                </div>
+                <div class="toolbar-divider"></div>
+                <div class="toolbar-group">
+                    <button class="format-btn" data-command="insertUnorderedList" title="Bullet List"><i
+                            data-lucide="list"></i></button>
+                    <button class="format-btn" data-command="insertOrderedList" title="Numbered List"><i
+                            data-lucide="list-ordered"></i></button>
+                </div>
+                <div class="spacer"></div>
+                <div class="status-bar" id="status-bar">Ready</div>
+            </header>
+
+            <div class="editor-container">
+                <div id="editor" class="editor" contenteditable="true" spellcheck="false">
+                    <h1>Untitled Draft</h1>
+                    <p>Start writing here...</p>
+                </div>
+            </div>
+        </main>
+
+        <!-- Right Sidebar (Chat/AI) -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="mode-toggle">
+                    <button id="mode-chat" class="mode-btn active">Chat</button>
+                    <button id="mode-editor" class="mode-btn">Editor</button>
+                </div>
+                <button id="new-chat-btn" class="icon-btn" title="New Session"><i
+                        data-lucide="plus-circle"></i></button>
+                <button id="settings-btn" class="icon-btn" title="Settings"><i data-lucide="settings"></i></button>
+            </div>
+            <div class="chat-history" id="chat-history">
+                <div class="chat-message ai">
+                    <div class="message-content">Hello! Please add your <strong>Gemini API Key</strong> in settings to
+                        get started.<br><br>You can use <strong>Cmd+K</strong> to edit text, or ask me questions here.
+                    </div>
+                </div>
+            </div>
+            <div class="chat-input-area">
+                <textarea id="chat-input" placeholder="Ask a question..." rows="1"></textarea>
+                <button id="send-chat-btn" class="icon-btn primary"><i data-lucide="send"></i></button>
+            </div>
+            <div class="sidebar-footer">
+                <div class="status-bar">Gemini 2.5 Flash Lite</div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Diff Controls (Hidden by default, cloned when needed) -->
+    <div id="diff-controls-template" class="diff-controls hidden">
+        <button class="diff-btn accept" title="Accept Change"><i data-lucide="check"></i></button>
+        <button class="diff-btn reject" title="Reject Change"><i data-lucide="x"></i></button>
+    </div>
+
+    <!-- Inline Edit Modal (Cmd+K) -->
+    <div id="inline-edit-modal" class="modal hidden">
+        <div class="modal-content inline-edit-box">
+            <div class="inline-input-wrapper">
+                <i data-lucide="sparkles" class="ai-icon"></i>
+                <input type="text" id="inline-input" placeholder="Edit selection... (e.g., 'Make it shorter')">
+                <span class="keyboard-hint">Esc to cancel</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal hidden">
+        <div class="modal-content settings-box">
+            <h3>Settings</h3>
+            <div class="form-group">
+                <label for="api-key-input">Gemini API Key</label>
+                <input type="password" id="api-key-input" placeholder="Paste your API key here">
+                <p class="help-text">Your key is stored locally in your browser.</p>
+            </div>
+            <div class="modal-actions">
+                <button id="save-settings-btn" class="btn primary">Save</button>
+                <button id="close-settings-btn" class="btn secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+    <script>
+        lucide.createIcons();
+    </script>
+</body>
+
+</html>
