@@ -20,7 +20,7 @@
         <!-- Left Sidebar (File Explorer) -->
         <aside class="sidebar-left">
             <div class="sidebar-header">
-                <h2>Explorer</h2>
+                <h2>BDA Group 20</h2>
                 <button id="new-file-btn" class="icon-btn" title="New File"><i data-lucide="file-plus"></i></button>
             </div>
             <div class="file-list" id="file-list">
@@ -41,22 +41,55 @@
                 </div>
                 <div class="toolbar-divider"></div>
                 <div class="toolbar-group">
+                    <div class="custom-select" id="font-select-container">
+                        <div class="select-trigger" id="font-trigger">
+                            <span id="font-value">Times New Roman</span>
+                            <i data-lucide="chevron-down" style="width: 12px;"></i>
+                        </div>
+                        <div class="select-options hidden" id="font-options">
+                            <div class="select-option" data-value="Inter">Inter</div>
+                            <div class="select-option" data-value="Arial">Arial</div>
+                            <div class="select-option" data-value="Helvetica">Helvetica</div>
+                            <div class="select-option" data-value="Verdana">Verdana</div>
+                            <div class="select-option" data-value="Tahoma">Tahoma</div>
+                            <div class="select-option" data-value="Trebuchet MS">Trebuchet MS</div>
+                            <div class="select-option selected" data-value="Times New Roman">Times New Roman</div>
+                            <div class="select-option" data-value="Georgia">Georgia</div>
+                            <div class="select-option" data-value="Garamond">Garamond</div>
+                            <div class="select-option" data-value="Courier New">Courier New</div>
+                            <div class="select-option" data-value="JetBrains Mono">JetBrains Mono</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="toolbar-divider"></div>
+                <div class="toolbar-group">
                     <button class="format-btn" data-command="formatBlock" data-value="H1" title="Heading 1"><i
                             data-lucide="heading-1"></i></button>
                     <button class="format-btn" data-command="formatBlock" data-value="H2" title="Heading 2"><i
                             data-lucide="heading-2"></i></button>
                     <button class="format-btn" data-command="formatBlock" data-value="P" title="Paragraph"><i
                             data-lucide="pilcrow"></i></button>
-                </div>
-                <div class="toolbar-divider"></div>
-                <div class="toolbar-group">
-                    <button class="format-btn" data-command="insertUnorderedList" title="Bullet List"><i
-                            data-lucide="list"></i></button>
                     <button class="format-btn" data-command="insertOrderedList" title="Numbered List"><i
                             data-lucide="list-ordered"></i></button>
                 </div>
+                <div class="toolbar-divider"></div>
+                <div class="toolbar-group">
+                    <button class="format-btn" id="undo-btn" title="Undo (Cmd+Z)"><i data-lucide="undo"></i></button>
+                    <button class="format-btn" id="redo-btn" title="Redo (Cmd+Shift+Z)"><i
+                            data-lucide="redo"></i></button>
+                </div>
+                <div class="toolbar-divider"></div>
+                <div class="toolbar-group">
+                    <button class="format-btn" id="insert-image-btn" title="Insert Image"><i
+                            data-lucide="image"></i></button>
+                    <input type="file" id="image-upload" accept="image/*" class="hidden">
+                </div>
+                <div class="toolbar-divider"></div>
+                <div class="toolbar-group">
+                    <button class="format-btn" id="search-btn" title="Find"><i data-lucide="search"></i></button>
+                    <button class="format-btn" id="print-btn" title="Print"><i data-lucide="printer"></i></button>
+                </div>
                 <div class="spacer"></div>
-                <div class="status-bar" id="status-bar">Ready</div>
             </header>
 
             <div class="editor-container">
@@ -90,7 +123,19 @@
                 <button id="send-chat-btn" class="icon-btn primary"><i data-lucide="send"></i></button>
             </div>
             <div class="sidebar-footer">
-                <div class="status-bar">Gemini 2.5 Flash Lite</div>
+                <div class="custom-select" id="model-select-container">
+                    <div class="select-trigger" id="model-trigger">
+                        <span id="model-value">Gemini 2.5 Flash Lite</span>
+                        <i data-lucide="chevron-down" style="width: 12px;"></i>
+                    </div>
+                    <div class="select-options hidden" id="model-options">
+                        <div class="select-option selected" data-value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite
+                        </div>
+                        <div class="select-option" data-value="gemini-2.5-flash">Gemini 2.5 Flash</div>
+                        <div class="select-option" data-value="gemini-2.5-pro">Gemini 2.5 Pro</div>
+                        <div class="select-option" data-value="gemini-3.0-pro">Gemini 3.0 Pro</div>
+                    </div>
+                </div>
             </div>
         </aside>
     </div>
@@ -101,13 +146,42 @@
         <button class="diff-btn reject" title="Reject Change"><i data-lucide="x"></i></button>
     </div>
 
+    <!-- Custom Search Bar -->
+    <div id="search-bar" class="search-bar hidden">
+        <input type="text" id="search-input" placeholder="Find...">
+        <div class="search-actions">
+            <button id="search-prev-btn" class="search-btn" title="Previous"><i data-lucide="chevron-up"></i></button>
+            <button id="search-next-btn" class="search-btn" title="Next"><i data-lucide="chevron-down"></i></button>
+            <div class="search-divider"></div>
+            <button id="search-close-btn" class="search-btn" title="Close"><i data-lucide="x"></i></button>
+        </div>
+    </div>
+
+    <!-- New File / Rename Modal -->
+    <div id="file-modal" class="modal hidden">
+        <div class="modal-content settings-box">
+            <h3 id="file-modal-title">New File</h3>
+            <div class="form-group">
+                <label for="file-name-input">Name</label>
+                <input type="text" id="file-name-input" placeholder="Enter file name...">
+            </div>
+            <div class="modal-actions">
+                <button id="cancel-file-btn" class="btn secondary">Cancel</button>
+                <button id="confirm-file-btn" class="btn primary">Create</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Inline Edit Modal (Cmd+K) -->
     <div id="inline-edit-modal" class="modal hidden">
         <div class="modal-content inline-edit-box">
+
             <div class="inline-input-wrapper">
-                <i data-lucide="sparkles" class="ai-icon"></i>
                 <input type="text" id="inline-input" placeholder="Edit selection... (e.g., 'Make it shorter')">
-                <span class="keyboard-hint">Esc to cancel</span>
+                <div class="inline-actions">
+                    <span class="keyboard-hint">Esc to cancel</span>
+                    <button id="close-inline-btn" class="icon-btn small" title="Close"><i data-lucide="x"></i></button>
+                </div>
             </div>
         </div>
     </div>
@@ -131,6 +205,7 @@
     <script src="script.js"></script>
     <script>
         lucide.createIcons();
+        document.querySelectorAll('svg').forEach(svg => svg.removeAttribute('xmlns'));
     </script>
 </body>
 
