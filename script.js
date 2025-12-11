@@ -524,7 +524,6 @@ Answer their question conversationally. Use Markdown for formatting.`;
         const progressContent = progressMsg.querySelector('.message-content');
 
         function updateProgress(step, status) {
-            // Simple visual log
             const stepDiv = document.createElement('div');
             stepDiv.className = 'workflow-step';
             stepDiv.innerHTML = `<strong>${step}:</strong> ${status}`;
@@ -543,75 +542,646 @@ Answer their question conversationally. Use Markdown for formatting.`;
             const analysis = await analyzeRequest(instruction, logger);
             updateProgress('Step 1', `Targeting: "${analysis.keywords}"`);
 
+            console.log("--- Agentic Workflow Debug ---");
+            console.log(`Step 1: Analyzed Instruction\nUser Input: "${instruction}"\nExtracted Keywords: "${analysis.keywords}"\nScope: "${analysis.scope}"\nGlobal: "${analysis.isGlobal}"`);
+
             // STEP 2: Search
             updateProgress('Step 2', 'Scanning document...');
-            const context = findRelevantContext(analysis.keywords);
+            
+            let contexts = [];
+            
+            if (analysis.isGlobal) {
+                // GLOBAL MODE: Process entire document
+                updateProgress('Step 2', 'Global mode: processing entire document.');
+                console.log("Step 2: Global Mode\nProcessing entire document with highlight mode.");
+                
+                contexts = [{
+                    elements: Array.from(editor.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6, li, span')),
+                    fullHtml: editor.innerHTML,
+                    snippet: 'Entire Document',
+                    isGlobal: true
+                }];
+            } else {
+                // Normal mode: find specific context
+                const context = findRelevantContext(analysis.keywords, analysis.scope, analysis.isGlobal);
 
             if (!context) {
                 updateProgress('Step 2', 'No specific paragraph found. Using full document.');
+                    console.log("Step 2: Context Search\nResult: No specific paragraph matched. Fallback to full document.");
+                    contexts = [{
+                        elements: [],
+                        fullHtml: editor.innerHTML,
+                        snippet: editor.innerText || '',
+                        isInline: analysis.scope === 'inline'
+                    }];
+                } else if (context.multiple) {
+                    updateProgress('Step 2', `Found ${context.contexts.length} target sections (global).`);
+                    contexts = context.contexts;
             } else {
-                // Truncate snippet for display
                 const displaySnippet = context.snippet.length > 40 ? context.snippet.substring(0, 40) + '...' : context.snippet;
                 updateProgress('Step 2', `Targeting paragraph: "${displaySnippet}"`);
+                    console.log(`Step 2: Context Search\nResult: Match Found!\nTarget Snippet: "${context.snippet}"`);
+                    contexts = [context];
+                }
             }
 
-            // STEP 3: Package
-            const targetHtml = context ? context.fullHtml : editor.innerHTML;
-            const contextName = context ? "Target Paragraph" : "Full Document";
-            updateProgress('Step 3', `Packaging ${contextName}...`);
-
-            // STEP 4: Request Edits
-            updateProgress('Step 4', 'Requesting edits from Gemini...');
+            // STEP 3: Request Edits (Rewrite Strategy)
+            updateProgress('Step 3', 'Requesting edits from Gemini...');
             const currentFile = files.find(f => f.id === activeFileId);
-            const changes = await generateJsonDiffs(instruction, targetHtml, currentFile.name, logger);
+            
+            let appliedCount = 0;
 
-            // STEP 5: Apply
-            if (changes.length > 0) {
-                updateProgress('Step 5', `Applying ${changes.length} edits...`);
+            for (const ctx of contexts) {
+                const targetHtml = ctx.fullHtml;
+                const targets = ctx.elements || [];
+                
+                console.log("Step 3: Requesting Edits");
+                
+                // We use a specific prompt for Rewriting/Editing known context
+                const newContent = await generateRewrite(instruction, targetHtml, currentFile.name, ctx.isInline ? 'inline' : analysis.scope, logger);
 
-                // Scope to the found element if possible
-                const scope = context ? context.element : null;
-                applyJsonDiffs(changes, scope);
+                // STEP 4: Apply
+                if (newContent && newContent !== targetHtml) {
+                    appliedCount += 1;
+                    updateProgress('Step 4', `Applying changes...`);
 
+                    // Check if it's GLOBAL MODE
+                    if (ctx && ctx.isGlobal) {
+                        // GLOBAL HIGHLIGHT MODE: Compare old and new, highlight differences
+                        const oldHtml = editor.innerHTML;
+                        
+                        // Parse both HTMLs
+                        const oldDiv = document.createElement('div');
+                        oldDiv.innerHTML = oldHtml;
+                        const newDiv = document.createElement('div');
+                        newDiv.innerHTML = newContent;
+                        
+                        // Simple diff: compare all block elements
+                        const oldElements = Array.from(oldDiv.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6, li'));
+                        const newElements = Array.from(newDiv.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6, li'));
+                        
+                        let changedCount = 0;
+                        
+                        // Compare element by element
+                        for (let i = 0; i < Math.min(oldElements.length, newElements.length); i++) {
+                            const oldEl = oldElements[i];
+                            const newEl = newElements[i];
+                            
+                            if (oldEl.innerText.trim() !== newEl.innerText.trim()) {
+                                // Mark as changed
+                                newEl.style.backgroundColor = '#fef3c7'; // Yellow highlight
+                                newEl.style.borderLeft = '3px solid #f59e0b';
+                                newEl.style.padding = '4px 8px';
+                                newEl.style.margin = '2px 0';
+                                newEl.classList.add('global-highlight-change');
+                                newEl.dataset.originalText = oldEl.innerHTML;
+                                changedCount++;
+                            }
+                        }
+                        
+                        // Replace editor content
+                        editor.innerHTML = newDiv.innerHTML;
+                        
+                        // Chat UI for Global Changes
+                        const actionsDiv = document.createElement('div');
+                        actionsDiv.className = 'chat-actions-container';
+                        actionsDiv.style.cssText = `margin-top:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; font-family:monospace; font-size:0.85em;`;
+                        
+                        const headerBar = document.createElement('div');
+                        headerBar.style.cssText = `padding:8px 12px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; color:#64748b;`;
+                        headerBar.innerHTML = `<div>Global Edit: ${changedCount} changes</div>`;
+                        actionsDiv.appendChild(headerBar);
+                        
+                        const contentArea = document.createElement('div');
+                        contentArea.style.cssText = `padding:12px; display:flex; gap:8px; background:white;`;
+                        
+                        const createBtn = (text, icon, action, colorClass = '') => {
+                            const btn = document.createElement('button');
+                            btn.innerHTML = `<i data-lucide="${icon}" style="width:14px;height:14px;margin-right:6px;"></i>${text}`;
+                            let bg = 'white';
+                            let color = '#475569';
+                            let border = '#e2e8f0';
+                            
+                            if (colorClass === 'primary') { bg = '#ecfdf5'; color = '#047857'; border = '#a7f3d0'; }
+                            if (colorClass === 'danger') { bg = '#fef2f2'; color = '#b91c1c'; border = '#fecaca'; }
+                            
+                            btn.style.cssText = `flex: 1; display:inline-flex; align-items:center; justify-content:center; padding:8px 12px; border-radius:6px; border:1px solid ${border}; background:${bg}; color:${color}; font-size:0.9em; cursor:pointer; transition:all 0.2s;`;
+                            
+                            btn.addEventListener('mouseenter', () => btn.style.filter = 'brightness(0.95)');
+                            btn.addEventListener('mouseleave', () => btn.style.filter = 'none');
+                            btn.addEventListener('click', action);
+                            return btn;
+                        };
+
+                        const btnContainer = document.createElement('div');
+                        btnContainer.style.display = 'flex';
+                        btnContainer.style.gap = '8px';
+                        btnContainer.style.width = '100%';
+
+                        const undoBtn = createBtn('Undo All', 'undo-2', () => {
+                            editor.innerHTML = oldHtml;
+                            actionsDiv.remove();
+                            addChatMessage('ai', 'All changes undone.');
+                        }, 'danger');
+                        
+                        const keepBtn = createBtn('Keep All', 'check', () => {
+                            // Remove highlight styles
+                            const highlighted = editor.querySelectorAll('.global-highlight-change');
+                            highlighted.forEach(el => {
+                                el.style.backgroundColor = '';
+                                el.style.borderLeft = '';
+                                el.style.padding = '';
+                                el.style.margin = '';
+                                el.classList.remove('global-highlight-change');
+                                delete el.dataset.originalText;
+                            });
+                            actionsDiv.remove();
+                            addChatMessage('ai', 'All changes accepted.');
+                        }, 'primary');
+                        
+                        undoBtn.style.display = 'none';
+                        keepBtn.style.display = 'none';
+
+                        const showBtn = createBtn('Show', 'eye', () => {
+                            // Scroll to first change
+                            const firstChange = editor.querySelector('.global-highlight-change');
+                            if (firstChange) {
+                                firstChange.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                firstChange.style.boxShadow = '0 0 0 4px rgba(245, 158, 11, 0.3)';
+                                setTimeout(() => firstChange.style.boxShadow = 'none', 2000);
+                            }
+                            
+                            showBtn.style.display = 'none';
+                            undoBtn.style.display = 'inline-flex';
+                            keepBtn.style.display = 'inline-flex';
+                        });
+
+                        btnContainer.appendChild(showBtn);
+                        btnContainer.appendChild(undoBtn);
+                        btnContainer.appendChild(keepBtn);
+                        
+                        contentArea.appendChild(btnContainer);
+                        actionsDiv.appendChild(contentArea);
+                        
+                        const successMsg = addChatMessage('ai', `Applied ${changedCount} changes globally.`);
+                        successMsg.appendChild(actionsDiv);
+                        lucide.createIcons();
+                        
+                    } else if (targets.length > 0) {
+                        // Check if it's an INLINE edit
+                        if (ctx && ctx.isInline) {
+                        // INLINE EDIT: Replace directly, but use diff markers in the editor
+                        const firstEl = targets[0];
+                        const oldHtml = firstEl.innerHTML; // Use innerHTML to preserve span structure if any
+                        const oldOuterHtml = firstEl.outerHTML; // Backup for Undo
+                        
+                        // We rely on the rewrite being the *content* of the element.
+                        // But generateRewrite returns the whole element (outerHTML) usually?
+                        // Let's check generateRewrite prompt. It says "OUTPUT ONLY THE NEW HTML CONTENT".
+                        // If input was "<div>...</div>", output is usually "<div>...</div>".
+                        
+                        // If we replace outerHTML, we might lose event listeners or attributes if AI strips them.
+                        // But finding difference inside innerHTML is safer for "Inline" visual.
+                        
+                        // Let's assume newContent is the new outerHTML.
+                        // Visual Diff Strategy:
+                        // Instead of replacing, we create a visual diff node.
+                        // But we want to keep the document structure valid.
+                        // If we replace <h1>Title</h1> with <span><del>Title</del><ins>New Title</ins></span>, it breaks block structure.
+                        
+                        // Better Strategy:
+                        // Just replace the element with newContent, but apply a class to it? No that doesn't show deleted text.
+                        
+                        // Hybrid Strategy:
+                        // Replace the element with newContent.
+                        // Store the old element reference or HTML.
+                        // IN THE CHAT: Show buttons Undo / Keep.
+                        // IN THE EDITOR: 
+                        // To show "What changed" inline is hard without a granular diff lib.
+                        // Let's try to wrap the change.
+                        
+                        // Let's use the simplest approach requested:
+                        // "Directly mark in file where deleted and replaced"
+                        // This implies: <del>Old</del> <ins>New</ins>
+                        
+                        // We will construct a wrapper that contains both.
+                        // CAUTION: If valid HTML structure allows. We can't put <div> inside <p> usually.
+                        // But browsers are lenient.
+                        
+                        // Let's verify if newContent is a full tag or just text.
+                        // AI usually returns full tag.
+                        
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = newContent;
+                        const newInner = tempDiv.firstChild ? tempDiv.firstChild.innerHTML : newContent;
+                        
+                        // Visual Diff HTML
+                        const diffHtml = `<span class="inline-diff-container" style="border:1px solid #e2e8f0; border-radius:4px; padding:2px; display:inline-block;"><span class="diff-del" style="background:#ffebee;color:#b91c1c;text-decoration:line-through;margin-right:4px;">${oldHtml}</span><span class="diff-add" style="background:#ecfdf5;color:#047857;">${newInner}</span></span>`;
+                        
+                        firstEl.innerHTML = diffHtml;
+                        
+                        // --- Chat UI for Inline ---
+                        const actionsDiv = document.createElement('div');
+                        actionsDiv.className = 'chat-actions-container';
+                        actionsDiv.style.cssText = `margin-top:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; font-family:monospace; font-size:0.85em;`;
+                        
+                        const headerBar = document.createElement('div');
+                        headerBar.style.cssText = `padding:8px 12px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; color:#64748b;`;
+                        headerBar.innerHTML = `<div>Inline Edit</div>`;
+                        actionsDiv.appendChild(headerBar);
+                        
+                        const contentArea = document.createElement('div');
+                        contentArea.style.cssText = `padding:12px; display:flex; gap:8px; justify-content:flex-end; background:white;`;
+                        
+                        // Buttons
+                        const createBtn = (text, icon, action, colorClass = '') => {
+                            const btn = document.createElement('button');
+                            btn.innerHTML = `<i data-lucide="${icon}" style="width:14px;height:14px;margin-right:6px;"></i>${text}`;
+                            let bg = 'white';
+                            let color = '#475569';
+                            let border = '#e2e8f0';
+                            
+                            if (colorClass === 'primary') { bg = '#ecfdf5'; color = '#047857'; border = '#a7f3d0'; }
+                            if (colorClass === 'danger') { bg = '#fef2f2'; color = '#b91c1c'; border = '#fecaca'; }
+                            
+                            btn.style.cssText = `display:inline-flex; align-items:center; padding:6px 12px; border-radius:6px; border:1px solid ${border}; background:${bg}; color:${color}; font-size:0.9em; cursor:pointer; transition:all 0.2s;`;
+                            
+                            btn.addEventListener('mouseenter', () => btn.style.filter = 'brightness(0.95)');
+                            btn.addEventListener('mouseleave', () => btn.style.filter = 'none');
+                            btn.addEventListener('click', action);
+                            return btn;
+                        };
+                        
+                        // Action Container
+                        const btnContainer = document.createElement('div');
+                        btnContainer.style.display = 'flex';
+                        btnContainer.style.gap = '8px';
+
+                        // Logic: Initially Show "Show". After click, reveal Undo/Keep.
+                        
+                        const undoBtn = createBtn('Undo', 'undo-2', () => {
+                            firstEl.innerHTML = oldHtml; 
+                            actionsDiv.remove();
+                            addChatMessage('ai', 'Inline edit undone.');
+                        }, 'danger');
+                        
+                        const keepBtn = createBtn('Keep', 'check', () => {
+                            firstEl.innerHTML = newInner;
+                            actionsDiv.remove();
+                            addChatMessage('ai', 'Inline edit accepted.');
+                        }, 'primary');
+                        
+                        // Hidden initially
+                        undoBtn.style.display = 'none';
+                        keepBtn.style.display = 'none';
+
+                        const showBtn = createBtn('Show', 'eye', () => {
+                            firstEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            // Highlight
+                            const diffSpan = firstEl.querySelector('.inline-diff-container');
+                            if(diffSpan) {
+                                diffSpan.style.boxShadow = '0 0 0 4px rgba(16, 185, 129, 0.2)';
+                                setTimeout(() => diffSpan.style.boxShadow = 'none', 2000);
+                            }
+                            
+                            // Reveal Actions
+                            showBtn.style.display = 'none'; // Hide self? Or change to "Hide"? 
+                            // User asked: "Show 了之後按鈕變成 Keep 跟 Undo"
+                            undoBtn.style.display = 'inline-flex';
+                            keepBtn.style.display = 'inline-flex';
+                        });
+
+                        btnContainer.appendChild(showBtn);
+                        btnContainer.appendChild(undoBtn);
+                        btnContainer.appendChild(keepBtn);
+                        
+                        contentArea.appendChild(btnContainer);
+                        actionsDiv.appendChild(contentArea);
+                        
+                        const successMsg = addChatMessage('ai', 'Changes applied.');
+                        successMsg.appendChild(actionsDiv);
+                        lucide.createIcons();
+                        
+                    } else {
+                        // BLOCK EDIT: Use Wrapper with Accept/Reject
+                        
+                        // 1. Insert a marker before the first element
+                        const marker = document.createElement('span');
+                        marker.id = 'edit-marker-' + Date.now();
+                        const firstEl = targets[0];
+                        const parent = firstEl.parentNode;
+                        
+                        if (parent) {
+                            parent.insertBefore(marker, firstEl);
+                            
+                            // 2. Remove old elements
+                            targets.forEach(el => {
+                                if (el.parentNode === parent) parent.removeChild(el);
+                            });
+
+                            // ... (Rest of Block Logic) ...
+                            const tempDiv = document.createElement('div');
+                            tempDiv.innerHTML = newContent;
+                            
+                            const fragment = document.createDocumentFragment();
+                            const newNodes = Array.from(tempDiv.childNodes);
+                            
+                            // Create a wrapper for the whole block to allow "Accept/Reject"
+                            const wrapperDiv = document.createElement('div');
+                            wrapperDiv.className = 'diff-block-wrapper highlight-pulse';
+                            // Clean style for the wrapper
+                            wrapperDiv.style.cssText = `
+                                border: 2px solid #e2e8f0;
+                                border-radius: 8px;
+                                margin: 16px 0;
+                                position: relative;
+                                background-color: #f8fafc;
+                                transition: all 0.2s ease;
+                            `;
+                            
+                            // Add Actions Header (Minimalist)
+                            const actionsHeader = document.createElement('div');
+                            actionsHeader.className = 'diff-actions-header';
+                            actionsHeader.style.cssText = `
+                                display: flex;
+                                gap: 4px;
+                                position: absolute;
+                                top: -12px;
+                                right: 12px;
+                                background: white;
+                                padding: 2px;
+                                border: 1px solid #e2e8f0;
+                                border-radius: 20px;
+                                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+                            `;
+                            
+                            // Use SVG Icons for Check/X instead of Emoji
+                            actionsHeader.innerHTML = `
+                                <button class="diff-btn accept" title="Accept" style="width:24px;height:24px;border-radius:50%;border:none;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#10b981;transition:background 0.2s;"><i data-lucide="check" style="width:14px;height:14px;"></i></button>
+                                <button class="diff-btn reject" title="Reject" style="width:24px;height:24px;border-radius:50%;border:none;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#ef4444;transition:background 0.2s;"><i data-lucide="x" style="width:14px;height:14px;"></i></button>
+                            `;
+                            wrapperDiv.appendChild(actionsHeader);
+                            
+                            // Content Container
+                            const contentContainer = document.createElement('div');
+                            contentContainer.className = 'diff-content-new';
+                            contentContainer.style.padding = '16px';
+                            newNodes.forEach(node => contentContainer.appendChild(node));
+                            wrapperDiv.appendChild(contentContainer);
+
+                            // Hidden Original Container (for Diff View via Chat)
+                            const originalContainer = document.createElement('div');
+                            originalContainer.className = 'diff-content-original hidden';
+                            originalContainer.style.cssText = `
+                                display: none;
+                                border-top: 1px dashed #cbd5e1;
+                                background-color: #fff1f2;
+                                padding: 16px;
+                                color: #991b1b;
+                                font-size: 0.9em;
+                            `;
+                            originalContainer.innerHTML = `<div style="margin-bottom:8px;font-size:0.8em;text-transform:uppercase;color:#ef4444;font-weight:bold;">Original</div>${targetHtml}`;
+                            wrapperDiv.appendChild(originalContainer);
+                            
+                            // Store original HTML for Reject
+                            wrapperDiv.dataset.originalHtml = targetHtml;
+                            
+                            parent.insertBefore(wrapperDiv, marker);
+                            parent.removeChild(marker);
+                            
+                            // Attach listeners
+                            attachBlockDiffListeners(wrapperDiv);
+                            
+                        // --- Chat UI Update (Light Style) ---
                 // Success Message with Actions
                 const actionsDiv = document.createElement('div');
-                actionsDiv.className = 'chat-actions';
-                actionsDiv.innerHTML = `
-                    <button id="show-changes-btn" class="action-btn">Show Changes</button>
-                    <div id="diff-actions" class="hidden">
-                        <button id="accept-all-btn" class="action-btn success">Accept All</button>
-                        <button id="reject-all-btn" class="action-btn danger">Reject All</button>
-                    </div>
-                `;
+                        actionsDiv.className = 'chat-actions-container';
+                        actionsDiv.style.cssText = `
+                            margin-top: 12px;
+                            background: #f8fafc;
+                            border: 1px solid #e2e8f0;
+                            border-radius: 8px;
+                            overflow: hidden;
+                            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+                            font-size: 0.85em;
+                        `;
+                        
+                        // Header Bar
+                        const headerBar = document.createElement('div');
+                        headerBar.style.cssText = `
+                            padding: 8px 12px;
+                            background: #f1f5f9;
+                            border-bottom: 1px solid #e2e8f0;
+                            display: flex;
+                            justify-content: space-between;
+                            align-items: center;
+                            color: #64748b;
+                        `;
+                        
+                        // File Info
+                        const fileInfo = document.createElement('div');
+                        fileInfo.innerHTML = `<i data-lucide="file-text" style="width:14px;height:14px;vertical-align:middle;margin-right:4px;"></i> ${currentFile.name}`;
+                        
+                        // Edit Stats (Fake stats for demo, or real if we calculate diff)
+                        const editStats = document.createElement('div');
+                        editStats.style.cssText = `font-size: 0.9em; color: #94a3b8;`;
+                        editStats.innerText = context.isInline ? 'Inline Edit' : 'Block Rewrite';
+                        
+                        headerBar.appendChild(fileInfo);
+                        headerBar.appendChild(editStats);
+                        actionsDiv.appendChild(headerBar);
+                        
+                        // Content Area (Buttons)
+                        const contentArea = document.createElement('div');
+                        contentArea.style.cssText = `
+                            padding: 12px;
+                            display: flex;
+                            gap: 8px;
+                            justify-content: flex-end;
+                            background: white;
+                        `;
+                        
+                        // Buttons
+                        const createBtn = (text, icon, action, colorClass = '') => {
+                            const btn = document.createElement('button');
+                            btn.innerHTML = `<i data-lucide="${icon}" style="width:14px;height:14px;margin-right:6px;"></i>${text}`;
+                            let bg = 'white';
+                            let color = '#475569';
+                            let border = '#e2e8f0';
+                            
+                            if (colorClass === 'primary') { bg = '#ecfdf5'; color = '#047857'; border = '#a7f3d0'; }
+                            if (colorClass === 'danger') { bg = '#fef2f2'; color = '#b91c1c'; border = '#fecaca'; }
+                            
+                            // Flex 1 to fill width
+                            btn.style.cssText = `flex: 1; display:inline-flex; align-items:center; justify-content:center; padding:8px 12px; border-radius:6px; border:1px solid ${border}; background:${bg}; color:${color}; font-size:0.9em; cursor:pointer; transition:all 0.2s;`;
+                            
+                            btn.addEventListener('mouseenter', () => btn.style.filter = 'brightness(0.95)');
+                            btn.addEventListener('mouseleave', () => btn.style.filter = 'none');
+                            btn.addEventListener('click', action);
+                            return btn;
+                        };
 
-                const successMsg = addChatMessage('ai', `Applied ${changes.length} changes.`);
-                successMsg.appendChild(actionsDiv);
+                        const btnContainer = document.createElement('div');
+                        btnContainer.style.display = 'flex';
+                        btnContainer.style.gap = '8px';
+                        btnContainer.style.width = '100%'; // Full width container
 
-                // Bind Events
-                const showBtn = actionsDiv.querySelector('#show-changes-btn');
-                const diffActions = actionsDiv.querySelector('#diff-actions');
-                const acceptAllBtn = actionsDiv.querySelector('#accept-all-btn');
-                const rejectAllBtn = actionsDiv.querySelector('#reject-all-btn');
+                        // Undo (Reject)
+                        const undoBtn = createBtn('Undo', 'undo-2', () => {
+                            // Trigger Reject on the wrapper
+                            const rejectBtn = wrapperDiv.querySelector('.reject');
+                            if(rejectBtn) rejectBtn.click();
+                            actionsDiv.remove(); 
+                            addChatMessage('ai', 'Changes undone.');
+                        }, 'danger');
+                        
+                        // Keep (Accept)
+                        const keepBtn = createBtn('Keep', 'check', () => {
+                            const acceptBtn = wrapperDiv.querySelector('.accept');
+                            if(acceptBtn) acceptBtn.click();
+                            actionsDiv.remove();
+                            addChatMessage('ai', 'Changes accepted.');
+                        }, 'primary');
 
-                showBtn.addEventListener('click', () => {
-                    showBtn.classList.add('hidden');
-                    diffActions.classList.remove('hidden');
-                    scrollToFirstDiff();
-                });
+                        // Initially hidden
+                        undoBtn.style.display = 'none';
+                        keepBtn.style.display = 'none';
 
-                acceptAllBtn.addEventListener('click', () => acceptAllDiffs(actionsDiv));
-                rejectAllBtn.addEventListener('click', () => rejectAllDiffs(actionsDiv));
-
+                        // Show (Show Changes)
+                        const showBtn = createBtn('Show', 'eye', () => {
+                            wrapperDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            wrapperDiv.classList.add('highlight-pulse');
+                            setTimeout(() => wrapperDiv.classList.remove('highlight-pulse'), 2000);
+                            
+                            const original = wrapperDiv.querySelector('.diff-content-original');
+                            if (original) {
+                                // Always show original when clicking Show
+                                original.style.display = 'block';
+                                
+                                // Reveal Actions, Hide Show button
+                                showBtn.style.display = 'none';
+                                undoBtn.style.display = 'inline-flex';
+                                keepBtn.style.display = 'inline-flex';
+                            }
+                        });
+                        
+                        btnContainer.appendChild(showBtn);
+                        btnContainer.appendChild(undoBtn);
+                        btnContainer.appendChild(keepBtn);
+                        
+                        contentArea.appendChild(btnContainer);
+                        
+                        actionsDiv.appendChild(contentArea);
+                        
+                        const successMsg = addChatMessage('ai', 'Changes applied.');
+                        successMsg.appendChild(actionsDiv);
+                        lucide.createIcons();
+                        } // end block edit
+                    } // end if (targets.length > 0)
             } else {
-                updateProgress('Step 5', 'No changes generated.');
+                    // Full document replacement
+                    const backup = editor.innerHTML;
+                    editor.innerHTML = newContent;
+                    addChatMessage('ai', 'Full document updated. (Undo available via Toolbar)');
+                }
+            } // end if (newContent && newContent !== targetHtml)
+        } // end for contexts
+
+            if (appliedCount === 0) {
+                updateProgress('Step 4', 'No changes generated.');
                 addChatMessage('ai', 'No edits were necessary.');
             }
 
         } catch (e) {
             updateProgress('Error', e.message);
+            console.error(e);
             throw e;
         }
     }
+
+    function attachBlockDiffListeners(wrapper) {
+        const acceptBtn = wrapper.querySelector('.accept');
+        const rejectBtn = wrapper.querySelector('.reject');
+
+        // Note: Show Diff button is now in Chat, not in wrapper header.
+        // We handle hover effects for clean UI
+        
+        if (acceptBtn) {
+            acceptBtn.addEventListener('mouseenter', () => acceptBtn.style.backgroundColor = '#ecfdf5');
+            acceptBtn.addEventListener('mouseleave', () => acceptBtn.style.backgroundColor = 'transparent');
+            
+            acceptBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                // Unwrap
+                const header = wrapper.querySelector('.diff-actions-header');
+                if(header) header.remove();
+                
+                const original = wrapper.querySelector('.diff-content-original');
+                if(original) original.remove();
+
+                const contentNew = wrapper.querySelector('.diff-content-new');
+                if (contentNew) {
+                    // Reset padding from container
+                    contentNew.style.padding = '';
+                    while (contentNew.firstChild) {
+                        wrapper.parentNode.insertBefore(contentNew.firstChild, wrapper);
+                    }
+                }
+                wrapper.remove();
+            });
+        }
+
+        if (rejectBtn) {
+            rejectBtn.addEventListener('mouseenter', () => rejectBtn.style.backgroundColor = '#fef2f2');
+            rejectBtn.addEventListener('mouseleave', () => rejectBtn.style.backgroundColor = 'transparent');
+            
+            rejectBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const originalHtml = wrapper.dataset.originalHtml;
+                wrapper.outerHTML = originalHtml;
+            });
+        }
+    }
+
+    async function generateRewrite(instruction, originalText, fileName, scope, onLog) {
+        let guidelines = "";
+        if (scope === 'inline') {
+            guidelines = `- CRITICAL: You are in INLINE mode. ONLY change the specific word/phrase requested. PRESERVE all other surrounding text, tags, and formatting exactly.`;
+        } else {
+            guidelines = `
+- **Target Focus**: Identify the specific section the user wants to change based on the Instruction.
+- **Preservation**: For any parts of the text NOT targeted by the instruction (e.g., surrounding context, other paragraphs), KEEP THEM EXACTLY AS IS. Do not translate or rewrite context just because you are editing the target.
+- **Translation**: If translating, only translate the targeted section.
+- **Structure**: Maintain the original HTML structure (divs, spans, classes) unless the instruction specifically asks to change structure.`;
+        }
+
+        const prompt = `
+You are a Smart Editing Engine.
+Instruction: "${instruction}"
+Context File: "${fileName}"
+
+Original Text (Context + Target):
+${originalText}
+
+TASK:
+Rewrite the "Original Text" above based on the Instruction.
+${guidelines}
+- OUTPUT ONLY THE NEW HTML CONTENT. NO MARKDOWN. NO JSON. NO PREAMBLE.
+
+`;
+        console.log("Gemini Prompt (Rewrite):\n" + prompt);
+        const response = await callGeminiAPI(prompt, onLog);
+        console.log("Gemini Response (Rewrite):\n" + response);
+        
+        // Clean up markdown code blocks if Gemini adds them
+        let clean = response.trim();
+        if (clean.startsWith('```html')) clean = clean.substring(7);
+        if (clean.startsWith('```')) clean = clean.substring(3);
+        if (clean.endsWith('```')) clean = clean.slice(0, -3);
+        
+        return clean.trim();
+    }
+
 
     function scrollToFirstDiff() {
         const firstDiff = editor.querySelector('.diff-wrapper');
@@ -638,20 +1208,25 @@ Answer their question conversationally. Use Markdown for formatting.`;
 
     async function analyzeRequest(instruction, onLog) {
         const prompt = `
-        You are a Search Query Extractor.
+        You are a Search Query Extractor & Intent Classifier.
         User Instruction: "${instruction}"
         
-        Task: Extract specific keywords or short phrases from the instruction that will help locate the *exact paragraph* or section the user wants to edit.
+        Task 1: Extract keywords to locate the target text.
+        Task 2: Classify the edit scope.
+        Task 3: Detect if this is a global operation.
         
-        Guidelines:
-        - EXTRACT UNIQUE NOUNS AND QUOTES.
-        - If the user text is in Chinese, extract the specific Chinese phrases or topic words (nouns/verbs) they mentioned.
-        - If the user quotes text (e.g. "change 'Hello' to 'Hi'"), extract 'Hello'.
-        - Ignore generic action verbs (change, fix, update, 修正, 改).
+        Scope Definitions:
+        - "inline": Replacing specific words, numbers, fixing typos, small translations.
+        - "block": Rewriting sentences, paragraphs, lists, tables.
+        
+        Global Detection:
+        - "isGlobal": true if user says "all", "every", "whole document", "全部", "所有", "整篇".
         
         OUTPUT FORMAT (JSON):
         {
-            "keywords": "string of search terms"
+            "keywords": "string",
+            "scope": "inline" or "block",
+            "isGlobal": boolean
         }
         `;
         const response = await callGeminiAPI(prompt, onLog);
@@ -659,11 +1234,12 @@ Answer their question conversationally. Use Markdown for formatting.`;
             const jsonMatch = response.match(/\{[\s\S]*\}/);
             return JSON.parse(jsonMatch[0]);
         } catch (e) {
-            return { keywords: instruction }; // Fallback
+            return { keywords: instruction, scope: 'block', isGlobal: false }; // Fallback
         }
     }
 
-    function findRelevantContext(keywords) {
+    function findRelevantContext(keywords, scope = 'block', isGlobal = false) {
+
         // TF-IDF / Cosine Similarity Implementation
         // Expanded selector to catch more text containers and specific block elements
         const elements = Array.from(editor.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre, div, span, article, section, td, th'));
@@ -714,6 +1290,7 @@ Answer their question conversationally. Use Markdown for formatting.`;
 
         let bestMatch = null;
         let maxScore = 0;
+        const allMatches = [];
 
         contentElements.forEach(el => {
             const text = el.innerText.trim();
@@ -770,14 +1347,147 @@ Answer their question conversationally. Use Markdown for formatting.`;
                 maxScore = similarity;
                 bestMatch = el;
             }
+            if (isGlobal && similarity > 0.05) {
+                allMatches.push(el);
+            }
         });
+
+        if (isGlobal && allMatches.length > 0) {
+            const contexts = allMatches.map(el => buildContext(el, scope));
+            return { multiple: true, contexts };
+        }
 
         // Lowered threshold to 0.05 to allow for looser matches in short CJK queries
         if (bestMatch && maxScore > 0.05) {
+            return buildContext(bestMatch, scope);
+        }
+
+        return null;
+
+        // Helper to build context (single)
+        function buildContext(bestMatchEl, scopeMode) {
+            // IF INLINE SCOPE: Do NOT expand. Return just the single element.
+            if (scopeMode === 'inline') {
             return {
-                element: bestMatch,
-                fullHtml: bestMatch.outerHTML,
-                snippet: bestMatch.innerText
+                    elements: [bestMatchEl],
+                    element: bestMatchEl,
+                    fullHtml: bestMatchEl.outerHTML,
+                    snippet: bestMatchEl.innerText,
+                    isInline: true
+                };
+            }
+
+            // Context Expansion: Smart Block Detection
+            
+            let contextElements = [bestMatchEl];
+            
+            // Helper to check if an element acts as a header
+            const isHeader = (el) => {
+                const tag = el.tagName;
+                if (['H1','H2','H3','H4','H5','H6'].includes(tag)) return true;
+                
+                // Heuristic: Short bold text or just short text followed by content might be a header
+                const text = el.innerText.trim();
+                
+                // Refined Header Detection:
+                // 1. Very short text (< 20 chars)
+                // 2. Must NOT look like a list item (e.g. "1. xxx" or "• xxx") - hard to detect generally
+                // 3. If it's a DIV, it's ambiguous. 
+                
+                if (text.length > 0 && text.length < 20) {
+                     return true;
+                }
+                return false;
+            };
+
+            // Strategy:
+            // 1. If bestMatch is a Header, we want to grab everything until the NEXT Header.
+            // 2. If bestMatch is Content, we want to grab surrounding content + preceding header.
+
+            const matchIsHeader = isHeader(bestMatchEl);
+            let current = bestMatchEl;
+            
+            // BACKWARD EXPANSION
+            // ... (keep existing) ...
+            if (!matchIsHeader) {
+                // Look back for a header or up to 3 siblings
+                for (let i = 0; i < 5; i++) {
+                    if (current.previousElementSibling) {
+                        current = current.previousElementSibling;
+                        contextElements.unshift(current);
+                        if (isHeader(current)) {
+                            // Found the header for this section, stop looking back
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            } else {
+                // If match is header, maybe look back just 1 to see if there is a br or unrelated divider, 
+                // but generally we start from the header.
+            }
+
+            // FORWARD EXPANSION
+            // If header, capture until next header.
+            // If content, capture neighbors.
+            
+            current = contextElements[contextElements.length - 1]; // Start from end of current selection
+            
+            // Safety limit
+            // We reduced max siblings to avoid grabbing too much unrelated content if header detection fails slightly
+            const MAX_SIBLINGS = matchIsHeader ? 60 : 15; 
+            
+            for (let i = 0; i < MAX_SIBLINGS; i++) {
+                if (current.nextElementSibling) {
+                    const next = current.nextElementSibling;
+                    const nextIsHeader = isHeader(next);
+                    
+                    // Logic to detect "Section Break" vs "List Item"
+                    
+                    // Stop if we hit a Strong Header (H1-H6)
+                    if (['H1','H2','H3','H4','H5','H6'].includes(next.tagName) && i > 0) break;
+
+                    // For "Weak Headers" (Short DIVs):
+                    // If we have collected enough items (e.g. > 10), and we see a potential header,
+                    // we need to decide if it's a list item or a new section.
+                    
+                    // Heuristic: If the CURRENT item was also a "Weak Header" (short text), 
+                    // and the NEXT item is also a "Weak Header", it is likely a LIST. Keep going.
+                    const currentIsWeakHeader = current.innerText.trim().length < 30;
+                    
+                    if (nextIsHeader) {
+                        // If we have a sequence of short items, keep going.
+                        // Only stop if we break the pattern? 
+                        // Actually, "Section Headers" are usually followed by "Long Content" or "Another List".
+                        
+                        // Let's use a simple buffer: allow up to 20 items in a list.
+                        if (i > 20) {
+                            break;
+                        }
+                    } 
+                    
+                    // If we see a "Long Paragraph" (> 100 chars), it's definitely content. Keep it.
+                    // If we see a "Medium Paragraph" after a list, it might be the start of new section's text?
+                    // No, usually Text follows Header.
+                    
+                    current = next;
+                    contextElements.push(current);
+                } else {
+                    break;
+                }
+            }
+            
+            // Combine HTML and Text
+            const fullHtml = contextElements.map(el => el.outerHTML).join('\n');
+            const snippet = contextElements.map(el => el.innerText).join('\n');
+            
+            return {
+                elements: contextElements, // Array of specific elements to replace
+                element: bestMatchEl.parentElement, // Parent scope (kept for fallback)
+                fullHtml: fullHtml,
+                snippet: snippet,
+                isInline: false
             };
         }
 
@@ -811,8 +1521,8 @@ Answer their question conversationally. Use Markdown for formatting.`;
     // --- Shared AI Edit Logic ---
     async function generateJsonDiffs(instruction, originalText, fileName, onLog) {
         const prompt = `
-You are a JSON Data Extraction Engine. You are NOT a chatbot.
-Your task is to compare the "Original Text" with the "Instruction" and output a JSON array of changes.
+You are a Smart Editing Engine. 
+Your task is to generate a JSON array of edits to transform the "Original Text" according to the "Instruction".
 
 Instruction: "${instruction}"
 Original Text: "${originalText}"
@@ -820,20 +1530,27 @@ Context File: "${fileName}"
 
 OUTPUT FORMAT:
 [
-  {"original": "exact substring to replace", "replacement": "new text"}
+  {"original": "exact substring from Original Text", "replacement": "new text"}
 ]
 
-CRITICAL RULES:
-1. Output MUST start with '[' and end with ']'.
-2. Do NOT write "Here is the JSON" or "I have updated the text".
-3. Do NOT use markdown code blocks.
-4. If no changes are needed, output [].
-5. The "original" text must match the input EXACTLY (case-sensitive).
-6. Do NOT include newlines in the "original" or "replacement" fields unless strictly necessary. Keep them as single-line strings if possible to avoid breaking HTML layout.
+GUIDELINES:
+1. **Whole Paragraph Replacement**: If the instruction is to "translate", "rewrite", or "summarize" a whole section, set "original" to the ENTIRE text of that specific paragraph (including HTML tags if needed) and "replacement" to the new version. Do NOT just replace individual words if the sentence structure needs to change.
+2. **Precision**: The "original" field must match a substring in "Original Text" EXACTLY (case-sensitive, whitespace-sensitive).
+3. **Safety**: Return '[]' if the instruction is unclear or no changes are needed.
+4. **Format**: Output valid JSON only. No markdown formatting (no \`\`\`). No preamble.
+
+CRITICAL:
+- If translating, replace the whole sentence or paragraph, not just nouns.
+- Example: If text is "<div>Hello world</div>" and instruction is "Translate to Spanish", output: [{"original": "<div>Hello world</div>", "replacement": "<div>Hola Mundo</div>"}] (or just the inner text if that's what matches).
 
 BEGIN JSON OUTPUT:
 `;
+        
+        console.log("Gemini Prompt:\n" + prompt);
+
         const response = await callGeminiAPI(prompt, onLog);
+        
+        console.log("Gemini Response:\n" + response);
 
         try {
             const jsonMatch = response.match(/\[[\s\S]*\]/);
@@ -934,10 +1651,19 @@ BEGIN JSON OUTPUT:
             const currentFile = files.find(f => f.id === activeFileId);
 
             try {
-                const changes = await generateJsonDiffs(instruction, selectedText, currentFile.name, (msg) => {
-                    console.log("Inline Edit Log:", msg); // No chat UI for inline, just console
+                // Use Rewrite strategy for Inline Modal too
+                const newContent = await generateRewrite(instruction, selectedText, currentFile.name, 'inline', (msg) => {
+                    console.log("Inline Edit Log:", msg);
                 });
-                applyJsonDiffs(changes, currentSelectionRange);
+                
+                // Apply directly to the selection
+                if (currentSelectionRange) {
+                    const selection = window.getSelection();
+                    selection.removeAllRanges();
+                    selection.addRange(currentSelectionRange);
+                    document.execCommand('insertHTML', false, newContent);
+                }
+                
                 closeInlineModal();
             } catch (error) {
                 alert('Failed: ' + error.message);
