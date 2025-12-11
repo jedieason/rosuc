@@ -4,7 +4,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cursor for Writers</title>
+    <title>Rosuc</title>
+    <link rel="icon" type="image/png" href="icon.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
@@ -20,7 +21,10 @@
         <!-- Left Sidebar (File Explorer) -->
         <aside class="sidebar-left">
             <div class="sidebar-header">
-                <h2>BDA Group 20</h2>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <img src="icon.png" alt="Rosuc Logo" style="width: 20px; height: 20px;">
+                    <h2>BDA Group 20</h2>
+                </div>
                 <button id="new-file-btn" class="icon-btn" title="New File"><i data-lucide="file-plus"></i></button>
             </div>
             <div class="file-list" id="file-list">
@@ -191,9 +195,10 @@
         <div class="modal-content settings-box">
             <h3>Settings</h3>
             <div class="form-group">
-                <label for="api-key-input">Gemini API Key</label>
-                <input type="password" id="api-key-input" placeholder="Paste your API key here">
-                <p class="help-text">Your key is stored locally in your browser.</p>
+                <label for="api-key-input">Gemini API Keys (One per line)</label>
+                <textarea id="api-key-input" placeholder="Paste your API keys here..." rows="4"
+                    style="width: 100%; resize: vertical; font-family: monospace;"></textarea>
+                <p class="help-text">Keys are stored locally. If one fails, the next will be used.</p>
             </div>
             <div class="modal-actions">
                 <button id="save-settings-btn" class="btn primary">Save</button>

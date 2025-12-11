@@ -56,7 +56,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     // State
-    let apiKey = localStorage.getItem('gemini_api_key') || '';
+    let apiKeys = [];
+    try {
+        const stored = localStorage.getItem('gemini_api_keys');
+        if (stored) {
+            apiKeys = JSON.parse(stored);
+        } else {
+            // Migration
+            const oldKey = localStorage.getItem('gemini_api_key');
+            if (oldKey) apiKeys = [oldKey];
+        }
+    } catch (e) {
+        apiKeys = [];
+    }
+
     let currentModel = 'gemini-2.5-flash-lite';
     let currentSelectionRange = null;
     let sidebarMode = 'chat'; // 'chat' or 'editor'
@@ -83,8 +96,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let activeFileId = 'file-1';
 
     // --- Initialization ---
-    if (apiKey) {
-        apiKeyInput.value = apiKey;
+    if (apiKeys.length > 0) {
+        apiKeyInput.value = apiKeys.join('\n');
     }
     renderFileList();
 
@@ -316,7 +329,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Settings Logic ---
     settingsBtn.addEventListener('click', () => {
         settingsModal.classList.remove('hidden');
-        apiKeyInput.value = apiKey;
+        apiKeyInput.value = apiKeys.join('\n');
     });
 
     closeSettingsBtn.addEventListener('click', () => {
@@ -324,10 +337,15 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     saveSettingsBtn.addEventListener('click', () => {
-        apiKey = apiKeyInput.value.trim();
-        localStorage.setItem('gemini_api_key', apiKey);
+        const text = apiKeyInput.value.trim();
+        apiKeys = text.split('\n').map(k => k.trim()).filter(k => k.length > 0);
+
+        localStorage.setItem('gemini_api_keys', JSON.stringify(apiKeys));
+        // Clear old key to avoid confusion
+        localStorage.removeItem('gemini_api_key');
+
         settingsModal.classList.add('hidden');
-        addChatMessage('ai', 'API Key saved! I am ready to help.');
+        addChatMessage('ai', `Saved ${apiKeys.length} API Key(s)! I am ready to help.`);
     });
 
     // --- Custom Select Logic ---
@@ -430,8 +448,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const text = chatInput.value.trim();
         if (!text) return;
 
-        if (!apiKey) {
-            addChatMessage('ai', 'Please set your Gemini API Key in settings first.');
+        if (apiKeys.length === 0) {
+            addChatMessage('ai', 'Please set your Gemini API Keys in settings first.');
             return;
         }
 
@@ -462,7 +480,10 @@ If the user is asking to edit text, remind them they can switch to "Editor" mode
 Answer their question conversationally. Use Markdown for formatting.`;
 
             try {
-                const response = await callGeminiAPI(prompt);
+                const response = await callGeminiAPI(prompt, (msg) => {
+                    // Log failover to chat
+                    addChatMessage('ai', `⚠️ ${msg}`);
+                });
                 chatHistory.removeChild(thinkingMsg); // Remove thinking
                 addChatMessage('ai', parseMarkdown(response), true);
             } catch (error) {
@@ -480,22 +501,13 @@ Answer their question conversationally. Use Markdown for formatting.`;
             addChatMessage('user', `[Editor] ${text}`);
             chatInput.disabled = true;
             const originalPlaceholder = chatInput.placeholder;
-            chatInput.placeholder = "Applying edits...";
+            chatInput.placeholder = "Processing...";
             sendChatBtn.disabled = true;
 
-            const thinkingMsg = addChatMessage('ai', 'Scanning document...');
-
-            const targetText = editor.innerText;
-            const currentFile = files.find(f => f.id === activeFileId);
-
             try {
-                const changes = await generateJsonDiffs(text, targetText, currentFile.name);
-                applyJsonDiffs(changes, null);
-                chatHistory.removeChild(thinkingMsg);
-                addChatMessage('ai', `Applied ${changes.length} edits.`);
+                await handleAgenticEdit(text);
             } catch (error) {
-                chatHistory.removeChild(thinkingMsg);
-                addChatMessage('ai', `Editor Error: ${error.message}`);
+                addChatMessage('ai', `Workflow Error: ${error.message}`);
             } finally {
                 chatInput.disabled = false;
                 chatInput.placeholder = originalPlaceholder;
@@ -505,9 +517,287 @@ Answer their question conversationally. Use Markdown for formatting.`;
         }
     }
 
+    // --- Agentic Workflow ---
+    async function handleAgenticEdit(instruction) {
+        // 1. Create a progress container in the chat
+        const progressMsg = addChatMessage('ai', 'Starting agentic workflow...');
+        const progressContent = progressMsg.querySelector('.message-content');
+
+        function updateProgress(step, status) {
+            // Simple visual log
+            const stepDiv = document.createElement('div');
+            stepDiv.className = 'workflow-step';
+            stepDiv.innerHTML = `<strong>${step}:</strong> ${status}`;
+            stepDiv.style.fontSize = '0.85em';
+            stepDiv.style.marginTop = '4px';
+            stepDiv.style.opacity = '0.8';
+            progressContent.appendChild(stepDiv);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+
+        const logger = (msg) => updateProgress('System', msg);
+
+        try {
+            // STEP 1: Analyze
+            updateProgress('Step 1', 'Analyzing request...');
+            const analysis = await analyzeRequest(instruction, logger);
+            updateProgress('Step 1', `Targeting: "${analysis.keywords}"`);
+
+            // STEP 2: Search
+            updateProgress('Step 2', 'Scanning document...');
+            const context = findRelevantContext(analysis.keywords);
+
+            if (!context) {
+                updateProgress('Step 2', 'No specific paragraph found. Using full document.');
+            } else {
+                // Truncate snippet for display
+                const displaySnippet = context.snippet.length > 40 ? context.snippet.substring(0, 40) + '...' : context.snippet;
+                updateProgress('Step 2', `Targeting paragraph: "${displaySnippet}"`);
+            }
+
+            // STEP 3: Package
+            const targetHtml = context ? context.fullHtml : editor.innerHTML;
+            const contextName = context ? "Target Paragraph" : "Full Document";
+            updateProgress('Step 3', `Packaging ${contextName}...`);
+
+            // STEP 4: Request Edits
+            updateProgress('Step 4', 'Requesting edits from Gemini...');
+            const currentFile = files.find(f => f.id === activeFileId);
+            const changes = await generateJsonDiffs(instruction, targetHtml, currentFile.name, logger);
+
+            // STEP 5: Apply
+            if (changes.length > 0) {
+                updateProgress('Step 5', `Applying ${changes.length} edits...`);
+
+                // Scope to the found element if possible
+                const scope = context ? context.element : null;
+                applyJsonDiffs(changes, scope);
+
+                // Success Message with Actions
+                const actionsDiv = document.createElement('div');
+                actionsDiv.className = 'chat-actions';
+                actionsDiv.innerHTML = `
+                    <button id="show-changes-btn" class="action-btn">Show Changes</button>
+                    <div id="diff-actions" class="hidden">
+                        <button id="accept-all-btn" class="action-btn success">Accept All</button>
+                        <button id="reject-all-btn" class="action-btn danger">Reject All</button>
+                    </div>
+                `;
+
+                const successMsg = addChatMessage('ai', `Applied ${changes.length} changes.`);
+                successMsg.appendChild(actionsDiv);
+
+                // Bind Events
+                const showBtn = actionsDiv.querySelector('#show-changes-btn');
+                const diffActions = actionsDiv.querySelector('#diff-actions');
+                const acceptAllBtn = actionsDiv.querySelector('#accept-all-btn');
+                const rejectAllBtn = actionsDiv.querySelector('#reject-all-btn');
+
+                showBtn.addEventListener('click', () => {
+                    showBtn.classList.add('hidden');
+                    diffActions.classList.remove('hidden');
+                    scrollToFirstDiff();
+                });
+
+                acceptAllBtn.addEventListener('click', () => acceptAllDiffs(actionsDiv));
+                rejectAllBtn.addEventListener('click', () => rejectAllDiffs(actionsDiv));
+
+            } else {
+                updateProgress('Step 5', 'No changes generated.');
+                addChatMessage('ai', 'No edits were necessary.');
+            }
+
+        } catch (e) {
+            updateProgress('Error', e.message);
+            throw e;
+        }
+    }
+
+    function scrollToFirstDiff() {
+        const firstDiff = editor.querySelector('.diff-wrapper');
+        if (firstDiff) {
+            firstDiff.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            firstDiff.classList.add('highlight-pulse');
+            setTimeout(() => firstDiff.classList.remove('highlight-pulse'), 2000);
+        }
+    }
+
+    function acceptAllDiffs(actionsDiv) {
+        const wrappers = editor.querySelectorAll('.diff-wrapper');
+        wrappers.forEach(wrapper => acceptDiff(wrapper));
+        addChatMessage('ai', 'All changes accepted.');
+        if (actionsDiv) actionsDiv.remove();
+    }
+
+    function rejectAllDiffs(actionsDiv) {
+        const wrappers = editor.querySelectorAll('.diff-wrapper');
+        wrappers.forEach(wrapper => rejectDiff(wrapper));
+        addChatMessage('ai', 'All changes rejected.');
+        if (actionsDiv) actionsDiv.remove();
+    }
+
+    async function analyzeRequest(instruction, onLog) {
+        const prompt = `
+        You are a Search Query Extractor.
+        User Instruction: "${instruction}"
+        
+        Task: Extract specific keywords or short phrases from the instruction that will help locate the *exact paragraph* or section the user wants to edit.
+        
+        Guidelines:
+        - EXTRACT UNIQUE NOUNS AND QUOTES.
+        - If the user text is in Chinese, extract the specific Chinese phrases or topic words (nouns/verbs) they mentioned.
+        - If the user quotes text (e.g. "change 'Hello' to 'Hi'"), extract 'Hello'.
+        - Ignore generic action verbs (change, fix, update, 修正, 改).
+        
+        OUTPUT FORMAT (JSON):
+        {
+            "keywords": "string of search terms"
+        }
+        `;
+        const response = await callGeminiAPI(prompt, onLog);
+        try {
+            const jsonMatch = response.match(/\{[\s\S]*\}/);
+            return JSON.parse(jsonMatch[0]);
+        } catch (e) {
+            return { keywords: instruction }; // Fallback
+        }
+    }
+
+    function findRelevantContext(keywords) {
+        // TF-IDF / Cosine Similarity Implementation
+        // Expanded selector to catch more text containers and specific block elements
+        const elements = Array.from(editor.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre, div, span, article, section, td, th'));
+        
+        if (elements.length === 0) return null;
+
+        // Filter out elements that are just containers for other block elements we already selected
+        // We only want 'leaf' nodes or nodes that have significant direct text
+        const contentElements = elements.filter(el => {
+            // If it has block children, it might be a container. 
+            // A simple heuristic: if it has direct text nodes with content, keep it.
+            const hasDirectText = Array.from(el.childNodes).some(node => 
+                node.nodeType === Node.TEXT_NODE && node.textContent.trim().length > 0
+            );
+            // If it's a block element like div/section, we only want it if it has direct text.
+            // For p, h1-h6, li, they are usually content holders.
+            const isContentBlock = ['P','H1','H2','H3','H4','H5','H6','LI','BLOCKQUOTE','PRE','TD','TH'].includes(el.tagName);
+            
+            return isContentBlock || hasDirectText;
+        });
+
+        if (contentElements.length === 0) return null;
+
+        // Improved Tokenizer for Multilingual (CJK support)
+        const tokenize = (text) => {
+            const str = text.toLowerCase();
+            const tokens = [];
+            
+            // 1. Extract Latin/Number words
+            const words = str.match(/[a-z0-9]+/g) || [];
+            tokens.push(...words);
+            
+            // 2. Extract CJK characters (as individual tokens)
+            // This treats each Chinese/Japanese/Korean character as a separate token, 
+            // which works better for cosine similarity in short snippets than full sentence tokens.
+            const cjk = str.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu) || [];
+            tokens.push(...cjk);
+            
+            return tokens;
+        };
+
+        const queryTokens = tokenize(keywords);
+        if (queryTokens.length === 0) return null;
+
+        // Calculate Term Frequencies (TF) for query
+        const queryVec = {};
+        queryTokens.forEach(t => queryVec[t] = (queryVec[t] || 0) + 1);
+
+        let bestMatch = null;
+        let maxScore = 0;
+
+        contentElements.forEach(el => {
+            const text = el.innerText.trim();
+            if (!text) return; // Skip empty elements
+
+            const docTokens = tokenize(text);
+            if (docTokens.length === 0) return;
+
+            // Calculate TF for document
+            const docVec = {};
+            docTokens.forEach(t => docVec[t] = (docVec[t] || 0) + 1);
+
+            // Calculate Cosine Similarity
+            let dotProduct = 0;
+            let queryMag = 0;
+            let docMag = 0;
+
+            const uniqueTerms = new Set([...Object.keys(queryVec), ...Object.keys(docVec)]);
+
+            uniqueTerms.forEach(term => {
+                const qVal = queryVec[term] || 0;
+                const dVal = docVec[term] || 0;
+                dotProduct += qVal * dVal;
+                queryMag += qVal * qVal;
+                docMag += dVal * dVal;
+            });
+
+            queryMag = Math.sqrt(queryMag);
+            docMag = Math.sqrt(docMag);
+
+            let similarity = 0;
+            if (queryMag > 0 && docMag > 0) {
+                similarity = dotProduct / (queryMag * docMag);
+            }
+
+            // Bonus for contiguous phrase match
+            // If the exact keyword string appears in the text, give a huge boost
+            if (text.toLowerCase().includes(keywords.toLowerCase())) {
+                similarity += 1.0;
+            } else {
+                // Partial phrase matching boost for CJK often helps
+                // If more than 50% of the query characters are found in sequence
+                if (keywords.length > 4) {
+                    const halfQuery = keywords.substring(0, Math.ceil(keywords.length / 2));
+                    if (text.toLowerCase().includes(halfQuery.toLowerCase())) {
+                         similarity += 0.5;
+                    }
+                }
+            }
+
+            // console.log(`Text: "${text.substring(0, 15)}..." Score: ${similarity.toFixed(3)}`);
+
+            if (similarity > maxScore) {
+                maxScore = similarity;
+                bestMatch = el;
+            }
+        });
+
+        // Lowered threshold to 0.05 to allow for looser matches in short CJK queries
+        if (bestMatch && maxScore > 0.05) {
+            return {
+                element: bestMatch,
+                fullHtml: bestMatch.outerHTML,
+                snippet: bestMatch.innerText
+            };
+        }
+
+        return null;
+    }
+
+    // --- IME Composition Handling ---
+    let isComposing = false;
+
+    chatInput.addEventListener('compositionstart', () => {
+        isComposing = true;
+    });
+
+    chatInput.addEventListener('compositionend', () => {
+        isComposing = false;
+    });
+
     sendChatBtn.addEventListener('click', handleChatSubmit);
     chatInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
+        if (e.key === 'Enter' && !e.shiftKey && !isComposing) {
             e.preventDefault();
             handleChatSubmit();
         }
@@ -519,7 +809,7 @@ Answer their question conversationally. Use Markdown for formatting.`;
     });
 
     // --- Shared AI Edit Logic ---
-    async function generateJsonDiffs(instruction, originalText, fileName) {
+    async function generateJsonDiffs(instruction, originalText, fileName, onLog) {
         const prompt = `
 You are a JSON Data Extraction Engine. You are NOT a chatbot.
 Your task is to compare the "Original Text" with the "Instruction" and output a JSON array of changes.
@@ -543,7 +833,7 @@ CRITICAL RULES:
 
 BEGIN JSON OUTPUT:
 `;
-        const response = await callGeminiAPI(prompt);
+        const response = await callGeminiAPI(prompt, onLog);
 
         try {
             const jsonMatch = response.match(/\[[\s\S]*\]/);
@@ -626,8 +916,8 @@ BEGIN JSON OUTPUT:
             const instruction = inlineInput.value.trim();
             if (!instruction) return;
 
-            if (!apiKey) {
-                alert('Please set API Key first');
+            if (apiKeys.length === 0) {
+                alert('Please set API Keys first');
                 return;
             }
 
@@ -644,7 +934,9 @@ BEGIN JSON OUTPUT:
             const currentFile = files.find(f => f.id === activeFileId);
 
             try {
-                const changes = await generateJsonDiffs(instruction, selectedText, currentFile.name);
+                const changes = await generateJsonDiffs(instruction, selectedText, currentFile.name, (msg) => {
+                    console.log("Inline Edit Log:", msg); // No chat UI for inline, just console
+                });
                 applyJsonDiffs(changes, currentSelectionRange);
                 closeInlineModal();
             } catch (error) {
@@ -657,10 +949,15 @@ BEGIN JSON OUTPUT:
         }
     });
 
-    function applyJsonDiffs(changes, range) {
+    function applyJsonDiffs(changes, scope) {
         let targetHtml = "";
-        if (range) {
-            targetHtml = range.toString();
+        let targetElement = editor;
+
+        if (scope instanceof Range) {
+            targetHtml = scope.toString();
+        } else if (scope instanceof HTMLElement) {
+            targetElement = scope;
+            targetHtml = scope.innerHTML;
         } else {
             targetHtml = editor.innerHTML;
         }
@@ -683,11 +980,13 @@ BEGIN JSON OUTPUT:
             newHtml = newHtml.replace(new RegExp(escapedOriginal, 'g'), diffHtml);
         });
 
-        if (range) {
+        if (scope instanceof Range) {
             const selection = window.getSelection();
             selection.removeAllRanges();
-            selection.addRange(range);
+            selection.addRange(scope);
             document.execCommand('insertHTML', false, newHtml);
+        } else if (scope instanceof HTMLElement) {
+            scope.innerHTML = newHtml;
         } else {
             editor.innerHTML = newHtml;
         }
@@ -723,41 +1022,64 @@ BEGIN JSON OUTPUT:
     }
 
     function acceptDiff(wrapper) {
+        if (!wrapper.parentNode) return; // Already handled
         const replacement = wrapper.querySelector('.diff-add').innerText;
         const textNode = document.createTextNode(replacement);
         wrapper.parentNode.replaceChild(textNode, wrapper);
     }
 
     function rejectDiff(wrapper) {
+        if (!wrapper.parentNode) return; // Already handled
         const original = wrapper.querySelector('.diff-del').innerText;
         const textNode = document.createTextNode(original);
         wrapper.parentNode.replaceChild(textNode, wrapper);
     }
 
-    // --- Gemini API Helper ---
-    async function callGeminiAPI(prompt) {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+    // --- Gemini API Helper with Failover ---
+    async function callGeminiAPI(prompt, onLog) {
+        let lastError = null;
 
-        const payload = {
-            contents: [{
-                parts: [{ text: prompt }]
-            }]
-        };
+        for (let i = 0; i < apiKeys.length; i++) {
+            const key = apiKeys[i];
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${key}`;
 
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(payload)
-        });
+            const payload = {
+                contents: [{
+                    parts: [{ text: prompt }]
+                }]
+            };
 
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.error?.message || 'API request failed');
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.error?.message || 'API request failed');
+                }
+
+                const data = await response.json();
+                return data.candidates[0].content.parts[0].text;
+
+            } catch (error) {
+                lastError = error;
+                const isLastKey = i === apiKeys.length - 1;
+
+                if (onLog) {
+                    onLog(`API Key ${i + 1} failed: ${error.message}. ${isLastKey ? 'No more keys.' : 'Switching to next key...'}`);
+                }
+
+                if (isLastKey) {
+                    throw error;
+                }
+                // Continue to next key
+            }
         }
-
-        const data = await response.json();
-        return data.candidates[0].content.parts[0].text;
+        throw lastError || new Error("No API keys available");
     }
 });
