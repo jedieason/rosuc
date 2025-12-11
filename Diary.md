@@ -1,126 +1,93 @@
-# Agentic Editing Workflow: Technical Challenges & Solutions Log
+# Development Process & Implemented Technologies
 
-## Overview
-This document details the technical evolution of the Agentic Editing Workflow implemented in `script.js`. It documents the challenges encountered when building a context-aware AI editing system for a web-based text editor, the specific failure modes of initial approaches, and the robust solutions developed to handle complex, real-world editing scenarios (especially multilingual and structural edits).
+## 1. Development Process & Challenges
 
----
+### Phase 1: Context Retrieval (Search)
+- **Initial Approach:** Simple keyword matching.
+- **Challenge:** Failed to capture semantic meaning or handle typos.
+- **Evolution:** Implemented **TF-IDF (Term Frequency-Inverse Document Frequency)** with **Cosine Similarity**.
+- **CJK Tokenization Issue:** Standard space-based tokenization failed for Chinese/Japanese.
+- **Solution:** Hybrid Tokenizer.
+    - Latin/Numbers: Split by word boundaries.
+    - CJK: Split by individual characters (`[\p{Script=Han}...]`).
+    - **Scoring Boost:** Added specific weight bonuses for contiguous phrase matches to prioritize exact substring hits over scattered keywords.
 
-## 1. Context Retrieval & Semantic Search
+### Phase 2: Context Expansion (The "Smart Block")
+- **Challenge:** LLM often received only the target sentence, lacking context (e.g., "Translate this" without knowing what "this" refers to).
+- **Solution:** **Dynamic DOM Expansion Logic**.
+    - **Header Detection:** Identify "owning" headers (H1-H6 or short text nodes < 20 chars).
+    - **Backward Expansion:** Look back up to 5 siblings to find the context header.
+    - **Forward Expansion:** Capture siblings until the next strong header.
+    - **List Pattern Recognition:** Heuristic to detect if siblings are part of a list (prevent cutting off long lists after 15 items).
 
-### Challenge: Low Precision in Locating User Intent
-**Initial State:**
-The system used a basic TF-IDF / Cosine Similarity search on DOM elements (`<p>`, `<h1>`, etc.) to match the user's natural language instruction with the relevant document section.
+### Phase 3: Edit Stability & Application
+- **Initial Approach:** JSON Search & Replace (`original` -> `replacement`).
+- **Failure Mode:** Fragile. If LLM hallucinated a single character in `original` or if HTML whitespace differed, the replace failed.
+- **Solution:** **Whole-Block Rewrite Strategy**.
+    - Instead of string replacement, we swap the entire DOM node (`outerHTML`).
+    - **Prompt Engineering:** "Surgical Editing". Explicit instructions to PRESERVE surrounding context and only modify the target.
 
-**Issues:**
-1.  **Tokenizer Failure (CJK):** The initial tokenizer split text by whitespace. For CJK (Chinese/Japanese/Korean) languages, sentences are continuous streams of characters without spaces.
-    *   *Result:* "這是一段測試" became a single, unique token. User queries like "測試" failed to match because `tf("測試")` in the document was 0.
-2.  **Strict Selector Scope:** The search only looked at specific block tags (`p`, `h1-h6`).
-    *   *Result:* Content inside `<div>`, `<span>`, or `<li>` was invisible to the search engine, causing "No context found" errors for complex HTML structures.
-3.  **Keyword Extraction Quality:** The LLM prompt for keyword extraction was generic.
-    *   *Result:* For "Translate the principal list", it might extract "list" (too broad) or "translate" (verb, irrelevant), missing the specific noun entities required for precise matching.
-
-### Solution: Enhanced Semantic Search Engine
-1.  **Character-Level CJK Tokenization:**
-    *   **Logic:** Modified the tokenizer to treat every single CJK character as a distinct token, while keeping Latin words intact.
-    *   **Implementation:** Used Regex `match(/[\p{Script=Han}...]` to decompose Chinese strings.
-    *   **Benefit:** Allows partial matching. Query "建中共產黨" now matches document text "建國中學學生自發成立..." based on shared character overlap, significantly boosting recall.
-2.  **Expanded DOM Traversal:**
-    *   **Logic:** broadened the query selector to include `div`, `span`, `li`, `article`, etc., but added a heuristic filter to exclude "container" divs (divs that only contain other blocks) and focus on "content" divs (divs containing direct text nodes).
-3.  **Hybrid Scoring with Phrase Bonus:**
-    *   **Logic:** Pure TF-IDF misses the *order* of words.
-    *   **Optimization:** Added a scoring bonus (+1.0) for exact substring matches and a smaller bonus (+0.5) for partial sequential matches (e.g., matching >50% of the query characters in order).
-
----
-
-## 2. Context Expansion (The "Snippet vs. Section" Problem)
-
-### Challenge: Insufficient Context for LLM
-**Initial State:**
-The system identified the *single best matching element* (e.g., the header `<div>歷屆校長</div>`) and sent only that element to the LLM for editing.
-
-**Issues:**
-1.  **Missing Content:** Users often search by header ("Edit the principal list"), but the actual content to be edited is in the *subsequent* paragraphs or list items.
-    *   *Result:* The LLM received only the header text, so it could only translate the header, leaving the actual list untouched.
-2.  **Loss of Cohesion:** Editing a single paragraph in isolation can break flow or reference.
-
-### Solution: Smart Block Expansion (Semantic Traversal)
-**Logic:**
-We implemented a heuristic algorithm to dynamically determine the "logical section" surrounding the best match.
-
-1.  **Header Detection:**
-    *   We define a "Header" not just by tags (`H1`-`H6`) but also by content features: `< 20 chars`, no list markers, potentially bold.
-2.  **Forward/Backward Expansion:**
-    *   **Scenario A (Match is Header):** If the user matches a header, we assume they want the section content. The system expands *forward* (captures next siblings) until it hits a "Stop Condition".
-    *   **Scenario B (Match is Content):** We look *backward* to find the parent header (for context) and forward/backward to capture immediate neighbors.
-3.  **Dynamic Stop Conditions (The List Problem):**
-    *   *Problem:* A list of items (e.g., school names) often consists of many short `<div>`s. A naive "Stop if next is Header" logic would interpret the second list item as a new header (because it's short) and stop early.
-    *   *Refined Logic:*
-        *   **Strong Stop:** Always stop at explicit `H1`-`H6`.
-        *   **Weak Stop:** For ambiguous short `<div>`s, check if we are in a "List Pattern". If we see a sequence of short items, we disable the stop condition and continue capturing (up to a safety limit of 60 items).
-        *   **Buffer:** Allow a minimum number of items (e.g., 20) before applying weak stop conditions, ensuring short lists are captured entirely.
+### Phase 4: UI/UX & Visualization
+- **Challenge:** User couldn't see what changed or verify edits safely.
+- **Solution A (Inline):** Visual Diff.
+    - Render deleted text with `text-decoration: line-through` (Red).
+    - Render new text with Green highlight.
+    - **Interaction:** Chat UI buttons **[Show]** (Scrolls to location) -> **[Undo] / [Keep]**.
+- **Solution B (Block):** Wrapper UI.
+    - Wrap changed blocks in a `.diff-block-wrapper`.
+    - Hidden `.diff-content-original` stored for rejection.
+- **Solution C (Global):** Highlighter Mode.
+    - For "Replace All" commands, we compare the entire DOM structure.
+    - Client-side Diffing: Iterate through block elements, compare `innerText`.
+    - Apply "Highlighter" style (Yellow background, Orange border) to changed elements.
 
 ---
 
-## 3. Applying Edits (The "Search & Replace" Failure)
+## 2. Currently Implemented Technologies
 
-### Challenge: Fragile JSON Diff Application
-**Initial State:**
-The system asked the LLM to return a JSON array of `{"original": "...", "replacement": "..."}`. It then used `String.replace()` to apply these changes to `editor.innerHTML`.
+### Core Architecture: Agentic Workflow
+The system operates on a 4-step Agentic Workflow triggered by natural language instructions.
 
-**Issues:**
-1.  **Whitespace/Formatting Mismatch:** The HTML string sent to the LLM was constructed via `join('\n')`. The LLM's returned `original` string often contained normalized whitespace or missing attributes that didn't *exactly* bit-match the browser's `innerHTML`.
-    *   *Result:* `String.replace` failed silently, and no changes were applied.
-2.  **Multi-Node Edits:** When context expansion captured multiple sibling nodes (e.g., Header + 10 list items), the LLM might return a single large `original` block spanning all of them. `innerHTML` rarely matches such a large multi-tag string perfectly due to browser serialization differences.
-3.  **Partial Hallucinations:** The LLM sometimes slightly altered the `original` text (e.g., fixing a typo in the quote), causing the match to fail.
+#### Step 1: Intent Analysis (`analyzeRequest`)
+- **LLM Classifier:** Analyzes user prompt to extract:
+    - `keywords`: For search.
+    - `scope`: `'inline'` vs `'block'`.
+    - `isGlobal`: Boolean flag for "Replace All" / "Whole Document" commands.
+- **Fallback Logic:** Regex-based detection for "all/every/全部" if LLM JSON parsing fails.
 
-### Solution: Whole-Block Rewrite Strategy
-**Logic:**
-Instead of asking the LLM to identify *diffs*, we ask it to **rewrite the entire targeted context**.
+#### Step 2: Context Retrieval (`findRelevantContext`)
+- **Engine:** Custom JavaScript implementation of Vector Space Model (TF-IDF).
+- **Global Mode:** If `isGlobal` is true, bypasses search and selects the entire document body.
+- **Block Mode:** Returns an expanded context object containing:
+    - `elements`: Array of DOM nodes to be replaced.
+    - `fullHtml`: Combined outerHTML of the expansion.
+    - `snippet`: Plain text representation.
 
-1.  **Target Locking:**
-    *   We identify the specific DOM elements involved in the expanded context (`contextElements`).
-    *   We concatenate their `outerHTML` to form the `Original Text` for the prompt.
-2.  **Generative Rewrite:**
-    *   **Prompt Engineering:** We instructed the LLM to act as a "Smart Editing Engine".
-    *   *Instruction:* "Rewrite the following block based on instructions. Output ONLY the new HTML."
-3.  **Direct DOM Replacement (The Breakthrough):**
-    *   We do NOT use string matching to find where to insert the new content.
-    *   **Implementation:**
-        1.  Insert a marker node before the first element of `contextElements`.
-        2.  Remove all elements in `contextElements` from the DOM.
-        3.  Insert the LLM-generated HTML (parsed into nodes) at the marker's position.
-    *   **Benefit:** Zero dependency on string matching. As long as we hold the references to the DOM nodes, we can replace them 100% reliably.
+#### Step 3: Generative Rewrite (`generateRewrite`)
+- **Model:** Gemini 1.5 Flash.
+- **Prompt Strategy:**
+    - **Role:** "Smart Editing Engine".
+    - **Constraints:** Output **ONLY** valid HTML. No Markdown formatting.
+    - **Preservation Protocol:** Explicit instruction to keep non-target context verbatim.
+    - **Input:** Receives `(Context + Target)`.
 
----
+#### Step 4: DOM Application & Visualization
 
-## 4. User Experience & Verification
-
-### Challenge: Trust & Undo
-**Issue:**
-Replacing large chunks of text automatically can be dangerous. Users need to verify changes.
-
-### Solution: Visual Diff Blocks
-1.  **Wrapper Interface:**
-    *   The new content is wrapped in a temporary `<div>` with a distinct border (Green dashed line) and a "Highlight Pulse" animation.
-2.  **Actionable UI:**
-    *   Added floating **[Accept]** and **[Reject]** buttons directly attached to the edited block in the editor.
-    *   **Accept:** Unwraps the content (removes border/buttons) and merges it into the document.
-    *   **Reject:** Uses a stored backup of the `originalHtml` to revert the specific block to its pre-edit state.
-
----
-
-## Summary of Optimization Path
-
-| Feature | Gen 1 (Naive) | Gen 2 (Improved) | Gen 3 (Final / Production) |
+| Mode | Strategy | Visual Feedback | Action Logic |
 | :--- | :--- | :--- | :--- |
-| **Search Scope** | `p`, `h1-h6` only | All blocks (`div`, `li`) | Filtered Content Blocks (excluding containers) |
-| **Tokenization** | Whitespace (English only) | Basic Regex | **Character-level CJK** + Hybrid TF-IDF |
-| **Context** | Single matched node | Fixed neighbors (+2/-2) | **Smart Section Expansion** (Header detection, List awareness) |
-| **Edit Logic** | `String.replace` (Exact match) | `String.replace` (Relaxed) | **DOM Node Replacement** (Rewrite Strategy) |
-| **Prompting** | "Extract JSON Diffs" | "Extract JSON" | **"Rewrite this HTML Block"** |
+| **Inline** | Direct `innerHTML` injection of Diff HTML. | `<del>` (Old) + `<ins>` (New) inside a wrapper. | **Undo:** Restore original HTML.<br>**Keep:** Remove `<del>` tags. |
+| **Block** | Node Replacement (`parentNode.replaceChild`). | `.diff-block-wrapper` container with `highlight-pulse` animation. | **Undo:** Restore `data-originalHtml`.<br>**Keep:** Unwrap and keep new content. |
+| **Global** | Full Document processing + Client-side Diff. | Iterative comparison of block elements. Changes marked with `.global-highlight-change` (Yellow Marker). | **Undo All:** Revert `editor.innerHTML`.<br>**Keep All:** Remove highlight classes. |
 
-## Future Optimizations
-1.  **Hierarchical Context:** Instead of just flat siblings, send the *parent path* (e.g., "Document > H1 > H2 > Text") to the LLM so it understands the macro-structure.
-2.  **Streaming Edits:** For very long sections, stream the rewritten HTML to the editor in real-time to reduce perceived latency.
-3.  **Fuzzy Search Fallback:** If DOM node replacement fails (rare), implement a fuzzy string search (Levenshtein distance) to locate the text to replace.
+### UI Interaction State Machine
+To ensure user verification, the Chat UI follows a strict state flow:
+1.  **Initial:** Shows **[Show]** button.
+2.  **Action:** User clicks **[Show]**.
+    - Viewport smooth-scrolls to the target element.
+    - Element flashes/pulses.
+    - (If Block) Hidden original text is revealed for comparison.
+3.  **Decision:** Button transforms into **[Undo]** (Danger/Red) and **[Keep]** (Primary/Green).
 
+### Cmd+K (Toolbar) Integration
+- **Unified Engine:** Refactored to use the same `generateRewrite` logic as the Chat Agent to ensure consistency.
+- **Method:** Uses `document.execCommand('insertHTML')` for robust handling of range selections across tag boundaries.
