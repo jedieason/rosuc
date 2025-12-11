@@ -1,3 +1,15 @@
+Requirements:
+Below are the problems we are trying to solve.
+
+Technical Design Document: AI-Powered Interactive Editor
+I2. What are the Key Capabilities? — The system is built on two core interaction paradigms:
+ * Contextual Dialogue: A dedicated interface allows users to ask the AI questions about the document as a whole or about selected text portions, maintaining conversation history for follow-up questions.
+ * Non-Destructive Editing: The user issues a command (e.g., "Refine tone," "Simplify structure") on selected text. The AI generates an enhanced version, which is presented in a side-by-side comparison format, enabling the user to accept or reject the change instantly.
+
+Now make a slide about the high level view, and implementation detail for curious readers. You should understand the code throughly to do this well. Use diagrams if helpful. Include the technical challanges and solutions we faced. The challenges are seen from the documentation below:
+
+Our documentation:
+
 # Development Process & Implemented Technologies
 
 ## 1. Development Process & Challenges

@@ -81,6 +81,67 @@ body {
     transition: width 0.3s var(--transition-smooth);
 }
 
+/* Sidebar Resizers */
+.sidebar-resizer {
+    width: 6px;
+    cursor: col-resize;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 20;
+}
+
+.sidebar-resizer::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 2px;
+    right: 2px;
+    border-radius: 999px;
+    background: transparent;
+    transition: background 0.2s var(--transition-smooth);
+}
+
+.sidebar-resizer:hover::before {
+    background: rgba(59, 130, 246, 0.25);
+}
+
+body.resizing {
+    cursor: col-resize !important;
+    user-select: none;
+}
+
+/* Collapsed Sidebars */
+.sidebar-left.collapsed,
+.sidebar.collapsed {
+    width: 52px !important;
+}
+
+.sidebar-left.collapsed .file-list,
+.sidebar.collapsed .chat-history,
+.sidebar.collapsed .chat-input-area,
+.sidebar.collapsed .sidebar-footer {
+    display: none !important;
+}
+
+.sidebar-left.collapsed .sidebar-header h2 {
+    display: none !important;
+}
+
+.sidebar-left.collapsed .sidebar-header {
+    justify-content: center;
+}
+
+.sidebar.collapsed .mode-toggle,
+.sidebar.collapsed #new-chat-btn,
+.sidebar.collapsed #settings-btn {
+    display: none !important;
+}
+
+.sidebar.collapsed .sidebar-header {
+    justify-content: center;
+}
+
 .sidebar-left {
     border-right: 1px solid var(--border-color);
 }

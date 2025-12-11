@@ -18,6 +18,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileList = document.getElementById('file-list');
     const newFileBtn = document.getElementById('new-file-btn');
 
+    // Sidebar Resize/Collapse Elements
+    const sidebarLeft = document.getElementById('sidebar-left');
+    const sidebarRight = document.getElementById('sidebar-right');
+    const leftResizer = document.getElementById('left-resizer');
+    const rightResizer = document.getElementById('right-resizer');
+    const toggleLeftSidebarBtn = document.getElementById('toggle-left-sidebar');
+    const toggleRightSidebarBtn = document.getElementById('toggle-right-sidebar');
+
     // File Modal Elements
     const fileModal = document.getElementById('file-modal');
     const fileModalTitle = document.getElementById('file-modal-title');
@@ -95,11 +103,126 @@ document.addEventListener('DOMContentLoaded', () => {
     ];
     let activeFileId = 'file-1';
 
+    // --- Helpers: API Key Masking ---
+    const maskKey = (k) => {
+        if (!k || k.length <= 6) return '*'.repeat(Math.max(k.length, 6));
+        const head = k.slice(0, 3);
+        const tail = k.slice(-3);
+        const body = '•'.repeat(Math.max(k.length - 6, 6));
+        return `${head}${body}${tail}`;
+    };
+    const maskKeysForDisplay = (keys) => keys.map(maskKey).join('\n');
+
     // --- Initialization ---
     if (apiKeys.length > 0) {
-        apiKeyInput.value = apiKeys.join('\n');
+        apiKeyInput.value = maskKeysForDisplay(apiKeys);
     }
     renderFileList();
+
+    // --- Sidebar Resize + Collapse Logic ---
+    const SIDEBAR_MIN = 180;
+    const SIDEBAR_MAX = 520;
+    const SIDEBAR_COLLAPSED = 52;
+
+    const getNum = (k, fallback) => {
+        const v = parseInt(localStorage.getItem(k) || '', 10);
+        return Number.isFinite(v) ? v : fallback;
+    };
+
+    const setSidebarWidth = (side, width) => {
+        const clamped = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, width));
+        if (side === 'left' && sidebarLeft) {
+            sidebarLeft.style.width = `${clamped}px`;
+            localStorage.setItem('sidebar_left_width', String(clamped));
+        }
+        if (side === 'right' && sidebarRight) {
+            sidebarRight.style.width = `${clamped}px`;
+            localStorage.setItem('sidebar_right_width', String(clamped));
+        }
+    };
+
+    const setCollapsed = (side, collapsed) => {
+        if (side === 'left' && sidebarLeft) {
+            sidebarLeft.classList.toggle('collapsed', collapsed);
+            localStorage.setItem('sidebar_left_collapsed', collapsed ? '1' : '0');
+            if (collapsed) {
+                sidebarLeft.style.width = `${SIDEBAR_COLLAPSED}px`;
+            } else {
+                setSidebarWidth('left', getNum('sidebar_left_width', 260));
+            }
+        }
+        if (side === 'right' && sidebarRight) {
+            sidebarRight.classList.toggle('collapsed', collapsed);
+            localStorage.setItem('sidebar_right_collapsed', collapsed ? '1' : '0');
+            if (collapsed) {
+                sidebarRight.style.width = `${SIDEBAR_COLLAPSED}px`;
+            } else {
+                setSidebarWidth('right', getNum('sidebar_right_width', 320));
+            }
+        }
+        lucide.createIcons();
+    };
+
+    // Restore widths + collapsed state
+    if (sidebarLeft) {
+        const w = getNum('sidebar_left_width', 260);
+        sidebarLeft.style.width = `${w}px`;
+        const collapsed = localStorage.getItem('sidebar_left_collapsed') === '1';
+        if (collapsed) setCollapsed('left', true);
+    }
+    if (sidebarRight) {
+        const w = getNum('sidebar_right_width', 320);
+        sidebarRight.style.width = `${w}px`;
+        const collapsed = localStorage.getItem('sidebar_right_collapsed') === '1';
+        if (collapsed) setCollapsed('right', true);
+    }
+
+    // Collapse toggles
+    if (toggleLeftSidebarBtn) {
+        toggleLeftSidebarBtn.addEventListener('click', () => {
+            const next = !sidebarLeft.classList.contains('collapsed');
+            // store last expanded width
+            if (!next) localStorage.setItem('sidebar_left_width', String(sidebarLeft.getBoundingClientRect().width));
+            setCollapsed('left', next);
+        });
+    }
+    if (toggleRightSidebarBtn) {
+        toggleRightSidebarBtn.addEventListener('click', () => {
+            const next = !sidebarRight.classList.contains('collapsed');
+            if (!next) localStorage.setItem('sidebar_right_width', String(sidebarRight.getBoundingClientRect().width));
+            setCollapsed('right', next);
+        });
+    }
+
+    const attachResizer = (handle, side) => {
+        if (!handle) return;
+        let startX = 0;
+        let startWidth = 0;
+        const onMove = (e) => {
+            const dx = e.clientX - startX;
+            const w = side === 'left' ? startWidth + dx : startWidth - dx;
+            setSidebarWidth(side, w);
+        };
+        const onUp = () => {
+            document.body.classList.remove('resizing');
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+        };
+        handle.addEventListener('mousedown', (e) => {
+            // If collapsed, expand first
+            if (side === 'left' && sidebarLeft?.classList.contains('collapsed')) setCollapsed('left', false);
+            if (side === 'right' && sidebarRight?.classList.contains('collapsed')) setCollapsed('right', false);
+
+            startX = e.clientX;
+            startWidth = (side === 'left' ? sidebarLeft : sidebarRight).getBoundingClientRect().width;
+            document.body.classList.add('resizing');
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onUp);
+        });
+    };
+
+    attachResizer(leftResizer, 'left');
+    attachResizer(rightResizer, 'right');
 
     // --- Mode Toggle Logic ---
     function setSidebarMode(mode) {
@@ -329,7 +452,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Settings Logic ---
     settingsBtn.addEventListener('click', () => {
         settingsModal.classList.remove('hidden');
-        apiKeyInput.value = apiKeys.join('\n');
+        apiKeyInput.value = maskKeysForDisplay(apiKeys);
     });
 
     closeSettingsBtn.addEventListener('click', () => {
@@ -338,7 +461,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     saveSettingsBtn.addEventListener('click', () => {
         const text = apiKeyInput.value.trim();
-        apiKeys = text.split('\n').map(k => k.trim()).filter(k => k.length > 0);
+        const lines = text.split('\n').map(k => k.trim()).filter(k => k.length > 0);
+
+        // If a line looks masked (contains • or *), fall back to existing key in same slot
+        apiKeys = lines.map((line, idx) => {
+            const looksMasked = /[•\\*]/.test(line);
+            if (looksMasked && apiKeys[idx]) return apiKeys[idx];
+            return line;
+        }).filter(k => k.length > 0);
 
         localStorage.setItem('gemini_api_keys', JSON.stringify(apiKeys));
         // Clear old key to avoid confusion
@@ -607,39 +737,134 @@ Answer their question conversationally. Use Markdown for formatting.`;
 
                     // Check if it's GLOBAL MODE
                     if (ctx && ctx.isGlobal) {
-                        // GLOBAL HIGHLIGHT MODE: Compare old and new, highlight differences
+                        // GLOBAL HIGHLIGHT MODE: word-level diff with red/green highlighting
                         const oldHtml = editor.innerHTML;
                         
-                        // Parse both HTMLs
                         const oldDiv = document.createElement('div');
                         oldDiv.innerHTML = oldHtml;
                         const newDiv = document.createElement('div');
                         newDiv.innerHTML = newContent;
                         
-                        // Simple diff: compare all block elements
+                        const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        // Tokenizer for global diff: keep whitespace, isolate citations like [1], split punctuation.
+                        const tokenizeForDiff = (text) => {
+                            // Order matters: whitespace first, then [digits] citations, then latin/num words,
+                            // then CJK chars, then any single non-space char.
+                            const re = /(\\s+|\\[\\d+\\]|[a-zA-Z0-9]+|[\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}]|[^\\s])/gu;
+                            return text.match(re) || [];
+                        };
+                        const diffWords = (a, b) => {
+                            const aT = tokenizeForDiff(a);
+                            const bT = tokenizeForDiff(b);
+                            const m = aT.length, n = bT.length;
+                            const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+                            for (let i = m - 1; i >= 0; i--) {
+                                for (let j = n - 1; j >= 0; j--) {
+                                    dp[i][j] = aT[i] === bT[j] ? 1 + dp[i + 1][j + 1] : Math.max(dp[i + 1][j], dp[i][j + 1]);
+                                }
+                            }
+                            const ops = [];
+                            let i = 0, j = 0;
+                            while (i < m && j < n) {
+                                if (aT[i] === bT[j]) {
+                                    ops.push({ type: 'same', text: aT[i] });
+                                    i++; j++;
+                                } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+                                    ops.push({ type: 'del', text: aT[i++] });
+                                } else {
+                                    ops.push({ type: 'add', text: bT[j++] });
+                                }
+                            }
+                            while (i < m) ops.push({ type: 'del', text: aT[i++] });
+                            while (j < n) ops.push({ type: 'add', text: bT[j++] });
+                            // Render each mismatch as: [DEL] immediately followed by [ADD]
+                            const isWhitespace = (t) => /^\s+$/.test(t);
+
+                            let html = '';
+                            let hasChange = false;
+                            let k = 0;
+
+                            while (k < ops.length) {
+                                const op = ops[k];
+
+                                if (op.type === 'same') {
+                                    html += esc(op.text);
+                                    k++;
+                                    continue;
+                                }
+
+                                let delText = '';
+                                let addText = '';
+
+                                while (k < ops.length && ops[k].type === 'del') {
+                                    delText += ops[k].text;
+                                    k++;
+                                }
+                                while (k < ops.length && ops[k].type === 'add') {
+                                    addText += ops[k].text;
+                                    k++;
+                                }
+
+                                // Avoid highlighting whitespace-only diffs
+                                if (isWhitespace(delText) && isWhitespace(addText)) {
+                                    html += esc(delText + addText);
+                                    continue;
+                                }
+
+                                if (delText) {
+                                    if (isWhitespace(delText)) {
+                                        html += esc(delText);
+                                    } else {
+                                        html += `<span class="global-del" style="background:#fee2e2;color:#b91c1c;text-decoration:line-through;">${esc(delText)}</span>`;
+                                        hasChange = true;
+                                    }
+                                }
+
+                                if (addText) {
+                                    if (isWhitespace(addText)) {
+                                        html += esc(addText);
+                                    } else {
+                                        html += `<span class="global-add" style="background:#dcfce7;color:#047857;">${esc(addText)}</span>`;
+                                        hasChange = true;
+                                    }
+                                }
+                            }
+
+                            return { html, hasChange };
+                        };
+                        
                         const oldElements = Array.from(oldDiv.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6, li'));
                         const newElements = Array.from(newDiv.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6, li'));
-                        
                         let changedCount = 0;
                         
-                        // Compare element by element
-                        for (let i = 0; i < Math.min(oldElements.length, newElements.length); i++) {
+                        const pairCount = Math.min(oldElements.length, newElements.length);
+                        for (let i = 0; i < pairCount; i++) {
                             const oldEl = oldElements[i];
                             const newEl = newElements[i];
-                            
-                            if (oldEl.innerText.trim() !== newEl.innerText.trim()) {
-                                // Mark as changed
-                                newEl.style.backgroundColor = '#fef3c7'; // Yellow highlight
-                                newEl.style.borderLeft = '3px solid #f59e0b';
-                                newEl.style.padding = '4px 8px';
-                                newEl.style.margin = '2px 0';
+                            const { html, hasChange } = diffWords(oldEl.innerText, newEl.innerText);
+                            if (hasChange) {
+                                newEl.innerHTML = html;
                                 newEl.classList.add('global-highlight-change');
-                                newEl.dataset.originalText = oldEl.innerHTML;
                                 changedCount++;
                             }
                         }
+                        // Extra new elements = additions
+                        for (let i = pairCount; i < newElements.length; i++) {
+                            const ne = newElements[i];
+                            ne.innerHTML = `<span class=\"global-add\" style=\"background:#dcfce7;color:#047857;\">${esc(ne.innerText)}</span>`;
+                            ne.classList.add('global-highlight-change');
+                            changedCount++;
+                        }
+                        // Extra old elements = deletions, append to newDiv for visibility
+                        for (let i = pairCount; i < oldElements.length; i++) {
+                            const oe = oldElements[i];
+                            const delBlock = document.createElement(oe.tagName || 'div');
+                            delBlock.innerHTML = `<span class=\"global-del\" style=\"background:#fee2e2;color:#b91c1c;text-decoration:line-through;\">${esc(oe.innerText)}</span>`;
+                            delBlock.classList.add('global-highlight-change');
+                            newDiv.appendChild(delBlock);
+                            changedCount++;
+                        }
                         
-                        // Replace editor content
                         editor.innerHTML = newDiv.innerHTML;
                         
                         // Chat UI for Global Changes
@@ -685,15 +910,14 @@ Answer their question conversationally. Use Markdown for formatting.`;
                         }, 'danger');
                         
                         const keepBtn = createBtn('Keep All', 'check', () => {
-                            // Remove highlight styles
-                            const highlighted = editor.querySelectorAll('.global-highlight-change');
-                            highlighted.forEach(el => {
-                                el.style.backgroundColor = '';
-                                el.style.borderLeft = '';
-                                el.style.padding = '';
-                                el.style.margin = '';
+                            // Accept: remove deletions, keep additions as plain text
+                            editor.querySelectorAll('.global-del').forEach(el => el.remove());
+                            editor.querySelectorAll('.global-add').forEach(el => {
+                                el.replaceWith(document.createTextNode(el.textContent));
+                            });
+                            // Clean any remaining markers
+                            editor.querySelectorAll('.global-highlight-change').forEach(el => {
                                 el.classList.remove('global-highlight-change');
-                                delete el.dataset.originalText;
                             });
                             actionsDiv.remove();
                             addChatMessage('ai', 'All changes accepted.');
@@ -704,10 +928,10 @@ Answer their question conversationally. Use Markdown for formatting.`;
 
                         const showBtn = createBtn('Show', 'eye', () => {
                             // Scroll to first change
-                            const firstChange = editor.querySelector('.global-highlight-change');
+                            const firstChange = editor.querySelector('.global-del, .global-add');
                             if (firstChange) {
                                 firstChange.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                firstChange.style.boxShadow = '0 0 0 4px rgba(245, 158, 11, 0.3)';
+                                firstChange.style.boxShadow = '0 0 0 4px rgba(100, 116, 139, 0.25)';
                                 setTimeout(() => firstChange.style.boxShadow = 'none', 2000);
                             }
                             
@@ -1079,10 +1303,175 @@ Answer their question conversationally. Use Markdown for formatting.`;
                         } // end block edit
                     } // end if (targets.length > 0)
             } else {
-                    // Full document replacement
-                    const backup = editor.innerHTML;
-                    editor.innerHTML = newContent;
-                    addChatMessage('ai', 'Full document updated. (Undo available via Toolbar)');
+                    // Full document diff + actions (same UX as other edits)
+                    const oldHtml = editor.innerHTML;
+
+                    // Reuse the GLOBAL diff rendering (red deletions + green additions, only where changed)
+                    const oldDiv = document.createElement('div');
+                    oldDiv.innerHTML = oldHtml;
+                    const newDiv = document.createElement('div');
+                    newDiv.innerHTML = newContent;
+
+                    const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    const tokenizeForDiff = (text) => {
+                        const re = /(\s+|\[\d+\]|[a-zA-Z0-9]+|[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]|[^\s])/gu;
+                        return text.match(re) || [];
+                    };
+                    const diffWords = (a, b) => {
+                        const aT = tokenizeForDiff(a);
+                        const bT = tokenizeForDiff(b);
+                        const m = aT.length, n = bT.length;
+                        const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+                        for (let i = m - 1; i >= 0; i--) {
+                            for (let j = n - 1; j >= 0; j--) {
+                                dp[i][j] = aT[i] === bT[j] ? 1 + dp[i + 1][j + 1] : Math.max(dp[i + 1][j], dp[i][j + 1]);
+                            }
+                        }
+                        const ops = [];
+                        let i = 0, j = 0;
+                        while (i < m && j < n) {
+                            if (aT[i] === bT[j]) {
+                                ops.push({ type: 'same', text: aT[i] });
+                                i++; j++;
+                            } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+                                ops.push({ type: 'del', text: aT[i++] });
+                            } else {
+                                ops.push({ type: 'add', text: bT[j++] });
+                            }
+                        }
+                        while (i < m) ops.push({ type: 'del', text: aT[i++] });
+                        while (j < n) ops.push({ type: 'add', text: bT[j++] });
+                        const isWhitespace = (t) => /^\s+$/.test(t);
+                        let html = '';
+                        let hasChange = false;
+                        let k = 0;
+                        while (k < ops.length) {
+                            const op = ops[k];
+                            if (op.type === 'same') {
+                                html += esc(op.text);
+                                k++;
+                                continue;
+                            }
+                            let delText = '';
+                            let addText = '';
+                            while (k < ops.length && ops[k].type === 'del') { delText += ops[k].text; k++; }
+                            while (k < ops.length && ops[k].type === 'add') { addText += ops[k].text; k++; }
+                            if (isWhitespace(delText) && isWhitespace(addText)) {
+                                html += esc(delText + addText);
+                                continue;
+                            }
+                            if (delText && !isWhitespace(delText)) {
+                                html += `<span class="global-del" style="background:#fee2e2;color:#b91c1c;text-decoration:line-through;">${esc(delText)}</span>`;
+                                hasChange = true;
+                            } else if (delText) {
+                                html += esc(delText);
+                            }
+                            if (addText && !isWhitespace(addText)) {
+                                html += `<span class="global-add" style="background:#dcfce7;color:#047857;">${esc(addText)}</span>`;
+                                hasChange = true;
+                            } else if (addText) {
+                                html += esc(addText);
+                            }
+                        }
+                        return { html, hasChange };
+                    };
+
+                    const oldElements = Array.from(oldDiv.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6, li'));
+                    const newElements = Array.from(newDiv.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6, li'));
+                    let changedCount = 0;
+                    const pairCount = Math.min(oldElements.length, newElements.length);
+                    for (let i = 0; i < pairCount; i++) {
+                        const { html, hasChange } = diffWords(oldElements[i].innerText, newElements[i].innerText);
+                        if (hasChange) {
+                            newElements[i].innerHTML = html;
+                            changedCount++;
+                        }
+                    }
+                    for (let i = pairCount; i < newElements.length; i++) {
+                        newElements[i].innerHTML = `<span class="global-add" style="background:#dcfce7;color:#047857;">${esc(newElements[i].innerText)}</span>`;
+                        changedCount++;
+                    }
+                    for (let i = pairCount; i < oldElements.length; i++) {
+                        const oe = oldElements[i];
+                        const delBlock = document.createElement(oe.tagName || 'div');
+                        delBlock.innerHTML = `<span class="global-del" style="background:#fee2e2;color:#b91c1c;text-decoration:line-through;">${esc(oe.innerText)}</span>`;
+                        newDiv.appendChild(delBlock);
+                        changedCount++;
+                    }
+
+                    editor.innerHTML = newDiv.innerHTML;
+
+                    // Chat UI (Show -> Undo/Keep)
+                    const actionsDiv = document.createElement('div');
+                    actionsDiv.className = 'chat-actions-container';
+                    actionsDiv.style.cssText = `margin-top:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; font-family:monospace; font-size:0.85em;`;
+
+                    const headerBar = document.createElement('div');
+                    headerBar.style.cssText = `padding:8px 12px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; color:#64748b;`;
+                    headerBar.innerHTML = `<div>Document Edit: ${changedCount} changes</div>`;
+                    actionsDiv.appendChild(headerBar);
+
+                    const contentArea = document.createElement('div');
+                    contentArea.style.cssText = `padding:12px; display:flex; gap:8px; background:white;`;
+
+                    const createBtn = (text, icon, action, colorClass = '') => {
+                        const btn = document.createElement('button');
+                        btn.innerHTML = `<i data-lucide="${icon}" style="width:14px;height:14px;margin-right:6px;"></i>${text}`;
+                        let bg = 'white';
+                        let color = '#475569';
+                        let border = '#e2e8f0';
+                        if (colorClass === 'primary') { bg = '#ecfdf5'; color = '#047857'; border = '#a7f3d0'; }
+                        if (colorClass === 'danger') { bg = '#fef2f2'; color = '#b91c1c'; border = '#fecaca'; }
+                        btn.style.cssText = `flex: 1; display:inline-flex; align-items:center; justify-content:center; padding:8px 12px; border-radius:6px; border:1px solid ${border}; background:${bg}; color:${color}; font-size:0.9em; cursor:pointer; transition:all 0.2s;`;
+                        btn.addEventListener('mouseenter', () => btn.style.filter = 'brightness(0.95)');
+                        btn.addEventListener('mouseleave', () => btn.style.filter = 'none');
+                        btn.addEventListener('click', action);
+                        return btn;
+                    };
+
+                    const btnContainer = document.createElement('div');
+                    btnContainer.style.display = 'flex';
+                    btnContainer.style.gap = '8px';
+                    btnContainer.style.width = '100%';
+
+                    const undoBtn = createBtn('Undo', 'undo-2', () => {
+                        editor.innerHTML = oldHtml;
+                        actionsDiv.remove();
+                        addChatMessage('ai', 'Changes undone.');
+                    }, 'danger');
+
+                    const keepBtn = createBtn('Keep', 'check', () => {
+                        editor.querySelectorAll('.global-del').forEach(el => el.remove());
+                        editor.querySelectorAll('.global-add').forEach(el => el.replaceWith(document.createTextNode(el.textContent)));
+                        actionsDiv.remove();
+                        addChatMessage('ai', 'Changes accepted.');
+                    }, 'primary');
+
+                    undoBtn.style.display = 'none';
+                    keepBtn.style.display = 'none';
+
+                    const showBtn = createBtn('Show', 'eye', () => {
+                        const firstChange = editor.querySelector('.global-del, .global-add');
+                        if (firstChange) {
+                            firstChange.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            firstChange.style.boxShadow = '0 0 0 4px rgba(100, 116, 139, 0.25)';
+                            setTimeout(() => firstChange.style.boxShadow = 'none', 2000);
+                        }
+                        showBtn.style.display = 'none';
+                        undoBtn.style.display = 'inline-flex';
+                        keepBtn.style.display = 'inline-flex';
+                    });
+
+                    btnContainer.appendChild(showBtn);
+                    btnContainer.appendChild(undoBtn);
+                    btnContainer.appendChild(keepBtn);
+
+                    contentArea.appendChild(btnContainer);
+                    actionsDiv.appendChild(contentArea);
+
+                    const successMsg = addChatMessage('ai', `Changes applied.`);
+                    successMsg.appendChild(actionsDiv);
+                    lucide.createIcons();
                 }
             } // end if (newContent && newContent !== targetHtml)
         } // end for contexts

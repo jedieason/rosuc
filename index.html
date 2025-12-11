@@ -19,18 +19,22 @@
 <body>
     <div class="app-container">
         <!-- Left Sidebar (File Explorer) -->
-        <aside class="sidebar-left">
+        <aside class="sidebar-left" id="sidebar-left">
             <div class="sidebar-header">
                 <div style="display: flex; align-items: center; gap: 8px;">
                     <img src="icon.png" alt="Rosuc Logo" style="width: 20px; height: 20px;">
                     <h2>BDA Group 20</h2>
                 </div>
-                <button id="new-file-btn" class="icon-btn" title="New File"><i data-lucide="file-plus"></i></button>
+                <div style="display:flex; align-items:center; gap:6px;">
+                    <button id="new-file-btn" class="icon-btn" title="New File"><i data-lucide="file-plus"></i></button>
+                    <button id="toggle-left-sidebar" class="icon-btn" title="Collapse Sidebar"><i data-lucide="panel-left-close"></i></button>
+                </div>
             </div>
             <div class="file-list" id="file-list">
                 <!-- File items will go here -->
             </div>
         </aside>
+        <div class="sidebar-resizer" id="left-resizer" aria-label="Resize left sidebar"></div>
 
         <!-- Main Content (Editor) -->
         <main class="main-content">
@@ -105,7 +109,8 @@
         </main>
 
         <!-- Right Sidebar (Chat/AI) -->
-        <aside class="sidebar">
+        <div class="sidebar-resizer" id="right-resizer" aria-label="Resize right sidebar"></div>
+        <aside class="sidebar" id="sidebar-right">
             <div class="sidebar-header">
                 <div class="mode-toggle">
                     <button id="mode-chat" class="mode-btn active">Chat</button>
@@ -114,6 +119,7 @@
                 <button id="new-chat-btn" class="icon-btn" title="New Session"><i
                         data-lucide="plus-circle"></i></button>
                 <button id="settings-btn" class="icon-btn" title="Settings"><i data-lucide="settings"></i></button>
+                <button id="toggle-right-sidebar" class="icon-btn" title="Collapse Sidebar"><i data-lucide="panel-right-close"></i></button>
             </div>
             <div class="chat-history" id="chat-history">
                 <div class="chat-message ai">
@@ -137,7 +143,7 @@
                         </div>
                         <div class="select-option" data-value="gemini-2.5-flash">Gemini 2.5 Flash</div>
                         <div class="select-option" data-value="gemini-2.5-pro">Gemini 2.5 Pro</div>
-                        <div class="select-option" data-value="gemini-3.0-pro">Gemini 3.0 Pro</div>
+                        <div class="select-option" data-value="gemini-3.0-pro-preview">Gemini 3.0 Pro</div>
                     </div>
                 </div>
             </div>
@@ -197,7 +203,7 @@
             <div class="form-group">
                 <label for="api-key-input">Gemini API Keys (One per line)</label>
                 <textarea id="api-key-input" placeholder="Paste your API keys here..." rows="4"
-                    style="width: 100%; resize: vertical; font-family: monospace;"></textarea>
+                    style="width: 100%; resize: vertical; font-family: monospace; background:#0f172a; color:#e2e8f0; border:1px solid #1f2937; border-radius:10px; padding:12px; box-shadow:0 8px 24px rgba(0,0,0,0.18);"></textarea>
                 <p class="help-text">Keys are stored locally. If one fails, the next will be used.</p>
             </div>
             <div class="modal-actions">
