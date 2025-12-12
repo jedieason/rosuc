@@ -128,6 +128,20 @@ body.resizing {
     display: none !important;
 }
 
+/* Hide new-file button when left sidebar is collapsed */
+.sidebar-left.collapsed #new-file-btn {
+    display: none !important;
+}
+
+/* Hide branding (logo + title) when left sidebar is collapsed */
+.sidebar-left.collapsed .sidebar-header img {
+    display: none !important;
+}
+
+.sidebar-left.collapsed .sidebar-header > div:first-child {
+    display: none !important;
+}
+
 .sidebar-left.collapsed .sidebar-header {
     justify-content: center;
 }
