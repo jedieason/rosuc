@@ -677,14 +677,14 @@ Answer their question conversationally. Use Markdown for formatting.`;
 
             // STEP 2: Search
             updateProgress('Step 2', 'Scanning document...');
-            
+
             let contexts = [];
-            
+
             if (analysis.isGlobal) {
                 // GLOBAL MODE: Process entire document
                 updateProgress('Step 2', 'Global mode: processing entire document.');
                 console.log("Step 2: Global Mode\nProcessing entire document with highlight mode.");
-                
+
                 contexts = [{
                     elements: Array.from(editor.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6, li, span')),
                     fullHtml: editor.innerHTML,
@@ -695,21 +695,22 @@ Answer their question conversationally. Use Markdown for formatting.`;
                 // Normal mode: find specific context
                 const context = findRelevantContext(analysis.keywords, analysis.scope, analysis.isGlobal);
 
-            if (!context) {
-                updateProgress('Step 2', 'No specific paragraph found. Using full document.');
+                if (!context) {
+                    updateProgress('Step 2', 'No specific paragraph found. Using full document.');
                     console.log("Step 2: Context Search\nResult: No specific paragraph matched. Fallback to full document.");
                     contexts = [{
                         elements: [],
                         fullHtml: editor.innerHTML,
                         snippet: editor.innerText || '',
-                        isInline: analysis.scope === 'inline'
+                        isInline: analysis.scope === 'inline',
+                        isFallback: true
                     }];
                 } else if (context.multiple) {
                     updateProgress('Step 2', `Found ${context.contexts.length} target sections (global).`);
                     contexts = context.contexts;
-            } else {
-                const displaySnippet = context.snippet.length > 40 ? context.snippet.substring(0, 40) + '...' : context.snippet;
-                updateProgress('Step 2', `Targeting paragraph: "${displaySnippet}"`);
+                } else {
+                    const displaySnippet = context.snippet.length > 40 ? context.snippet.substring(0, 40) + '...' : context.snippet;
+                    updateProgress('Step 2', `Targeting paragraph: "${displaySnippet}"`);
                     console.log(`Step 2: Context Search\nResult: Match Found!\nTarget Snippet: "${context.snippet}"`);
                     contexts = [context];
                 }
@@ -718,17 +719,43 @@ Answer their question conversationally. Use Markdown for formatting.`;
             // STEP 3: Request Edits (Rewrite Strategy)
             updateProgress('Step 3', 'Requesting edits from Gemini...');
             const currentFile = files.find(f => f.id === activeFileId);
-            
+
             let appliedCount = 0;
 
             for (const ctx of contexts) {
                 const targetHtml = ctx.fullHtml;
                 const targets = ctx.elements || [];
-                
+
                 console.log("Step 3: Requesting Edits");
-                
+
                 // We use a specific prompt for Rewriting/Editing known context
-                const newContent = await generateRewrite(instruction, targetHtml, currentFile.name, ctx.isInline ? 'inline' : analysis.scope, logger);
+                let newContent = null;
+
+                if (ctx.isFallback) {
+                    console.log("Step 3: Fallback Mode - Search & Patch");
+                    updateProgress('Step 3', 'Fallback: Searching for exact target to patch...');
+
+                    try {
+                        const patchData = await generateSearchAndPatch(instruction, targetHtml, currentFile.name, logger);
+
+                        // Apply Patch Strategy
+                        if (patchData && patchData.target_to_replace && patchData.replacement_content) {
+                            if (editor.innerHTML.includes(patchData.target_to_replace)) {
+                                console.log(`Step 4: Applying Patch.\nTarget: "${patchData.target_to_replace.substring(0, 50)}..."\nReplacement: "${patchData.replacement_content.substring(0, 50)}..."`);
+                                newContent = editor.innerHTML.replace(patchData.target_to_replace, patchData.replacement_content);
+                            } else {
+                                updateProgress('Error', 'AI identified a target that was not found in document.');
+                                console.warn("Patch target not found in document:", patchData.target_to_replace);
+                                newContent = targetHtml; // No change
+                            }
+                        }
+                    } catch (e) {
+                        updateProgress('Error', 'Patch generation failed.');
+                        newContent = targetHtml;
+                    }
+                } else {
+                    newContent = await generateRewrite(instruction, targetHtml, currentFile.name, ctx.isInline ? 'inline' : analysis.scope, logger);
+                }
 
                 // STEP 4: Apply
                 if (newContent && newContent !== targetHtml) {
@@ -739,12 +766,12 @@ Answer their question conversationally. Use Markdown for formatting.`;
                     if (ctx && ctx.isGlobal) {
                         // GLOBAL HIGHLIGHT MODE: word-level diff with red/green highlighting
                         const oldHtml = editor.innerHTML;
-                        
+
                         const oldDiv = document.createElement('div');
                         oldDiv.innerHTML = oldHtml;
                         const newDiv = document.createElement('div');
                         newDiv.innerHTML = newContent;
-                        
+
                         const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
                         // Tokenizer for global diff: keep whitespace, isolate citations like [1], split punctuation.
                         const tokenizeForDiff = (text) => {
@@ -832,11 +859,11 @@ Answer their question conversationally. Use Markdown for formatting.`;
 
                             return { html, hasChange };
                         };
-                        
+
                         const oldElements = Array.from(oldDiv.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6, li'));
                         const newElements = Array.from(newDiv.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6, li'));
                         let changedCount = 0;
-                        
+
                         const pairCount = Math.min(oldElements.length, newElements.length);
                         for (let i = 0; i < pairCount; i++) {
                             const oldEl = oldElements[i];
@@ -864,34 +891,34 @@ Answer their question conversationally. Use Markdown for formatting.`;
                             newDiv.appendChild(delBlock);
                             changedCount++;
                         }
-                        
+
                         editor.innerHTML = newDiv.innerHTML;
-                        
+
                         // Chat UI for Global Changes
                         const actionsDiv = document.createElement('div');
                         actionsDiv.className = 'chat-actions-container';
                         actionsDiv.style.cssText = `margin-top:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; font-family:monospace; font-size:0.85em;`;
-                        
+
                         const headerBar = document.createElement('div');
                         headerBar.style.cssText = `padding:8px 12px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; color:#64748b;`;
                         headerBar.innerHTML = `<div>Global Edit: ${changedCount} changes</div>`;
                         actionsDiv.appendChild(headerBar);
-                        
+
                         const contentArea = document.createElement('div');
                         contentArea.style.cssText = `padding:12px; display:flex; gap:8px; background:white;`;
-                        
+
                         const createBtn = (text, icon, action, colorClass = '') => {
                             const btn = document.createElement('button');
                             btn.innerHTML = `<i data-lucide="${icon}" style="width:14px;height:14px;margin-right:6px;"></i>${text}`;
                             let bg = 'white';
                             let color = '#475569';
                             let border = '#e2e8f0';
-                            
+
                             if (colorClass === 'primary') { bg = '#ecfdf5'; color = '#047857'; border = '#a7f3d0'; }
                             if (colorClass === 'danger') { bg = '#fef2f2'; color = '#b91c1c'; border = '#fecaca'; }
-                            
+
                             btn.style.cssText = `flex: 1; display:inline-flex; align-items:center; justify-content:center; padding:8px 12px; border-radius:6px; border:1px solid ${border}; background:${bg}; color:${color}; font-size:0.9em; cursor:pointer; transition:all 0.2s;`;
-                            
+
                             btn.addEventListener('mouseenter', () => btn.style.filter = 'brightness(0.95)');
                             btn.addEventListener('mouseleave', () => btn.style.filter = 'none');
                             btn.addEventListener('click', action);
@@ -908,7 +935,7 @@ Answer their question conversationally. Use Markdown for formatting.`;
                             actionsDiv.remove();
                             addChatMessage('ai', 'All changes undone.');
                         }, 'danger');
-                        
+
                         const keepBtn = createBtn('Keep All', 'check', () => {
                             // Accept: remove deletions, keep additions as plain text
                             editor.querySelectorAll('.global-del').forEach(el => el.remove());
@@ -922,7 +949,7 @@ Answer their question conversationally. Use Markdown for formatting.`;
                             actionsDiv.remove();
                             addChatMessage('ai', 'All changes accepted.');
                         }, 'primary');
-                        
+
                         undoBtn.style.display = 'none';
                         keepBtn.style.display = 'none';
 
@@ -934,7 +961,7 @@ Answer their question conversationally. Use Markdown for formatting.`;
                                 firstChange.style.boxShadow = '0 0 0 4px rgba(100, 116, 139, 0.25)';
                                 setTimeout(() => firstChange.style.boxShadow = 'none', 2000);
                             }
-                            
+
                             showBtn.style.display = 'none';
                             undoBtn.style.display = 'inline-flex';
                             keepBtn.style.display = 'inline-flex';
@@ -943,178 +970,178 @@ Answer their question conversationally. Use Markdown for formatting.`;
                         btnContainer.appendChild(showBtn);
                         btnContainer.appendChild(undoBtn);
                         btnContainer.appendChild(keepBtn);
-                        
+
                         contentArea.appendChild(btnContainer);
                         actionsDiv.appendChild(contentArea);
-                        
+
                         const successMsg = addChatMessage('ai', `Applied ${changedCount} changes globally.`);
                         successMsg.appendChild(actionsDiv);
                         lucide.createIcons();
-                        
+
                     } else if (targets.length > 0) {
                         // Check if it's an INLINE edit
                         if (ctx && ctx.isInline) {
-                        // INLINE EDIT: Replace directly, but use diff markers in the editor
-                        const firstEl = targets[0];
-                        const oldHtml = firstEl.innerHTML; // Use innerHTML to preserve span structure if any
-                        const oldOuterHtml = firstEl.outerHTML; // Backup for Undo
-                        
-                        // We rely on the rewrite being the *content* of the element.
-                        // But generateRewrite returns the whole element (outerHTML) usually?
-                        // Let's check generateRewrite prompt. It says "OUTPUT ONLY THE NEW HTML CONTENT".
-                        // If input was "<div>...</div>", output is usually "<div>...</div>".
-                        
-                        // If we replace outerHTML, we might lose event listeners or attributes if AI strips them.
-                        // But finding difference inside innerHTML is safer for "Inline" visual.
-                        
-                        // Let's assume newContent is the new outerHTML.
-                        // Visual Diff Strategy:
-                        // Instead of replacing, we create a visual diff node.
-                        // But we want to keep the document structure valid.
-                        // If we replace <h1>Title</h1> with <span><del>Title</del><ins>New Title</ins></span>, it breaks block structure.
-                        
-                        // Better Strategy:
-                        // Just replace the element with newContent, but apply a class to it? No that doesn't show deleted text.
-                        
-                        // Hybrid Strategy:
-                        // Replace the element with newContent.
-                        // Store the old element reference or HTML.
-                        // IN THE CHAT: Show buttons Undo / Keep.
-                        // IN THE EDITOR: 
-                        // To show "What changed" inline is hard without a granular diff lib.
-                        // Let's try to wrap the change.
-                        
-                        // Let's use the simplest approach requested:
-                        // "Directly mark in file where deleted and replaced"
-                        // This implies: <del>Old</del> <ins>New</ins>
-                        
-                        // We will construct a wrapper that contains both.
-                        // CAUTION: If valid HTML structure allows. We can't put <div> inside <p> usually.
-                        // But browsers are lenient.
-                        
-                        // Let's verify if newContent is a full tag or just text.
-                        // AI usually returns full tag.
-                        
-                        const tempDiv = document.createElement('div');
-                        tempDiv.innerHTML = newContent;
-                        const newInner = tempDiv.firstChild ? tempDiv.firstChild.innerHTML : newContent;
-                        
-                        // Visual Diff HTML
-                        const diffHtml = `<span class="inline-diff-container" style="border:1px solid #e2e8f0; border-radius:4px; padding:2px; display:inline-block;"><span class="diff-del" style="background:#ffebee;color:#b91c1c;text-decoration:line-through;margin-right:4px;">${oldHtml}</span><span class="diff-add" style="background:#ecfdf5;color:#047857;">${newInner}</span></span>`;
-                        
-                        firstEl.innerHTML = diffHtml;
-                        
-                        // --- Chat UI for Inline ---
-                        const actionsDiv = document.createElement('div');
-                        actionsDiv.className = 'chat-actions-container';
-                        actionsDiv.style.cssText = `margin-top:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; font-family:monospace; font-size:0.85em;`;
-                        
-                        const headerBar = document.createElement('div');
-                        headerBar.style.cssText = `padding:8px 12px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; color:#64748b;`;
-                        headerBar.innerHTML = `<div>Inline Edit</div>`;
-                        actionsDiv.appendChild(headerBar);
-                        
-                        const contentArea = document.createElement('div');
-                        contentArea.style.cssText = `padding:12px; display:flex; gap:8px; justify-content:flex-end; background:white;`;
-                        
-                        // Buttons
-                        const createBtn = (text, icon, action, colorClass = '') => {
-                            const btn = document.createElement('button');
-                            btn.innerHTML = `<i data-lucide="${icon}" style="width:14px;height:14px;margin-right:6px;"></i>${text}`;
-                            let bg = 'white';
-                            let color = '#475569';
-                            let border = '#e2e8f0';
-                            
-                            if (colorClass === 'primary') { bg = '#ecfdf5'; color = '#047857'; border = '#a7f3d0'; }
-                            if (colorClass === 'danger') { bg = '#fef2f2'; color = '#b91c1c'; border = '#fecaca'; }
-                            
-                            btn.style.cssText = `display:inline-flex; align-items:center; padding:6px 12px; border-radius:6px; border:1px solid ${border}; background:${bg}; color:${color}; font-size:0.9em; cursor:pointer; transition:all 0.2s;`;
-                            
-                            btn.addEventListener('mouseenter', () => btn.style.filter = 'brightness(0.95)');
-                            btn.addEventListener('mouseleave', () => btn.style.filter = 'none');
-                            btn.addEventListener('click', action);
-                            return btn;
-                        };
-                        
-                        // Action Container
-                        const btnContainer = document.createElement('div');
-                        btnContainer.style.display = 'flex';
-                        btnContainer.style.gap = '8px';
+                            // INLINE EDIT: Replace directly, but use diff markers in the editor
+                            const firstEl = targets[0];
+                            const oldHtml = firstEl.innerHTML; // Use innerHTML to preserve span structure if any
+                            const oldOuterHtml = firstEl.outerHTML; // Backup for Undo
 
-                        // Logic: Initially Show "Show". After click, reveal Undo/Keep.
-                        
-                        const undoBtn = createBtn('Undo', 'undo-2', () => {
-                            firstEl.innerHTML = oldHtml; 
-                            actionsDiv.remove();
-                            addChatMessage('ai', 'Inline edit undone.');
-                        }, 'danger');
-                        
-                        const keepBtn = createBtn('Keep', 'check', () => {
-                            firstEl.innerHTML = newInner;
-                            actionsDiv.remove();
-                            addChatMessage('ai', 'Inline edit accepted.');
-                        }, 'primary');
-                        
-                        // Hidden initially
-                        undoBtn.style.display = 'none';
-                        keepBtn.style.display = 'none';
+                            // We rely on the rewrite being the *content* of the element.
+                            // But generateRewrite returns the whole element (outerHTML) usually?
+                            // Let's check generateRewrite prompt. It says "OUTPUT ONLY THE NEW HTML CONTENT".
+                            // If input was "<div>...</div>", output is usually "<div>...</div>".
 
-                        const showBtn = createBtn('Show', 'eye', () => {
-                            firstEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            // Highlight
-                            const diffSpan = firstEl.querySelector('.inline-diff-container');
-                            if(diffSpan) {
-                                diffSpan.style.boxShadow = '0 0 0 4px rgba(16, 185, 129, 0.2)';
-                                setTimeout(() => diffSpan.style.boxShadow = 'none', 2000);
-                            }
-                            
-                            // Reveal Actions
-                            showBtn.style.display = 'none'; // Hide self? Or change to "Hide"? 
-                            // User asked: "Show 了之後按鈕變成 Keep 跟 Undo"
-                            undoBtn.style.display = 'inline-flex';
-                            keepBtn.style.display = 'inline-flex';
-                        });
+                            // If we replace outerHTML, we might lose event listeners or attributes if AI strips them.
+                            // But finding difference inside innerHTML is safer for "Inline" visual.
 
-                        btnContainer.appendChild(showBtn);
-                        btnContainer.appendChild(undoBtn);
-                        btnContainer.appendChild(keepBtn);
-                        
-                        contentArea.appendChild(btnContainer);
-                        actionsDiv.appendChild(contentArea);
-                        
-                        const successMsg = addChatMessage('ai', 'Changes applied.');
-                        successMsg.appendChild(actionsDiv);
-                        lucide.createIcons();
-                        
-                    } else {
-                        // BLOCK EDIT: Use Wrapper with Accept/Reject
-                        
-                        // 1. Insert a marker before the first element
-                        const marker = document.createElement('span');
-                        marker.id = 'edit-marker-' + Date.now();
-                        const firstEl = targets[0];
-                        const parent = firstEl.parentNode;
-                        
-                        if (parent) {
-                            parent.insertBefore(marker, firstEl);
-                            
-                            // 2. Remove old elements
-                            targets.forEach(el => {
-                                if (el.parentNode === parent) parent.removeChild(el);
-                            });
+                            // Let's assume newContent is the new outerHTML.
+                            // Visual Diff Strategy:
+                            // Instead of replacing, we create a visual diff node.
+                            // But we want to keep the document structure valid.
+                            // If we replace <h1>Title</h1> with <span><del>Title</del><ins>New Title</ins></span>, it breaks block structure.
 
-                            // ... (Rest of Block Logic) ...
+                            // Better Strategy:
+                            // Just replace the element with newContent, but apply a class to it? No that doesn't show deleted text.
+
+                            // Hybrid Strategy:
+                            // Replace the element with newContent.
+                            // Store the old element reference or HTML.
+                            // IN THE CHAT: Show buttons Undo / Keep.
+                            // IN THE EDITOR: 
+                            // To show "What changed" inline is hard without a granular diff lib.
+                            // Let's try to wrap the change.
+
+                            // Let's use the simplest approach requested:
+                            // "Directly mark in file where deleted and replaced"
+                            // This implies: <del>Old</del> <ins>New</ins>
+
+                            // We will construct a wrapper that contains both.
+                            // CAUTION: If valid HTML structure allows. We can't put <div> inside <p> usually.
+                            // But browsers are lenient.
+
+                            // Let's verify if newContent is a full tag or just text.
+                            // AI usually returns full tag.
+
                             const tempDiv = document.createElement('div');
                             tempDiv.innerHTML = newContent;
-                            
-                            const fragment = document.createDocumentFragment();
-                            const newNodes = Array.from(tempDiv.childNodes);
-                            
-                            // Create a wrapper for the whole block to allow "Accept/Reject"
-                            const wrapperDiv = document.createElement('div');
-                            wrapperDiv.className = 'diff-block-wrapper highlight-pulse';
-                            // Clean style for the wrapper
-                            wrapperDiv.style.cssText = `
+                            const newInner = tempDiv.firstChild ? tempDiv.firstChild.innerHTML : newContent;
+
+                            // Visual Diff HTML
+                            const diffHtml = `<span class="inline-diff-container" style="border:1px solid #e2e8f0; border-radius:4px; padding:2px; display:inline-block;"><span class="diff-del" style="background:#ffebee;color:#b91c1c;text-decoration:line-through;margin-right:4px;">${oldHtml}</span><span class="diff-add" style="background:#ecfdf5;color:#047857;">${newInner}</span></span>`;
+
+                            firstEl.innerHTML = diffHtml;
+
+                            // --- Chat UI for Inline ---
+                            const actionsDiv = document.createElement('div');
+                            actionsDiv.className = 'chat-actions-container';
+                            actionsDiv.style.cssText = `margin-top:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; font-family:monospace; font-size:0.85em;`;
+
+                            const headerBar = document.createElement('div');
+                            headerBar.style.cssText = `padding:8px 12px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; color:#64748b;`;
+                            headerBar.innerHTML = `<div>Inline Edit</div>`;
+                            actionsDiv.appendChild(headerBar);
+
+                            const contentArea = document.createElement('div');
+                            contentArea.style.cssText = `padding:12px; display:flex; gap:8px; justify-content:flex-end; background:white;`;
+
+                            // Buttons
+                            const createBtn = (text, icon, action, colorClass = '') => {
+                                const btn = document.createElement('button');
+                                btn.innerHTML = `<i data-lucide="${icon}" style="width:14px;height:14px;margin-right:6px;"></i>${text}`;
+                                let bg = 'white';
+                                let color = '#475569';
+                                let border = '#e2e8f0';
+
+                                if (colorClass === 'primary') { bg = '#ecfdf5'; color = '#047857'; border = '#a7f3d0'; }
+                                if (colorClass === 'danger') { bg = '#fef2f2'; color = '#b91c1c'; border = '#fecaca'; }
+
+                                btn.style.cssText = `display:inline-flex; align-items:center; padding:6px 12px; border-radius:6px; border:1px solid ${border}; background:${bg}; color:${color}; font-size:0.9em; cursor:pointer; transition:all 0.2s;`;
+
+                                btn.addEventListener('mouseenter', () => btn.style.filter = 'brightness(0.95)');
+                                btn.addEventListener('mouseleave', () => btn.style.filter = 'none');
+                                btn.addEventListener('click', action);
+                                return btn;
+                            };
+
+                            // Action Container
+                            const btnContainer = document.createElement('div');
+                            btnContainer.style.display = 'flex';
+                            btnContainer.style.gap = '8px';
+
+                            // Logic: Initially Show "Show". After click, reveal Undo/Keep.
+
+                            const undoBtn = createBtn('Undo', 'undo-2', () => {
+                                firstEl.innerHTML = oldHtml;
+                                actionsDiv.remove();
+                                addChatMessage('ai', 'Inline edit undone.');
+                            }, 'danger');
+
+                            const keepBtn = createBtn('Keep', 'check', () => {
+                                firstEl.innerHTML = newInner;
+                                actionsDiv.remove();
+                                addChatMessage('ai', 'Inline edit accepted.');
+                            }, 'primary');
+
+                            // Hidden initially
+                            undoBtn.style.display = 'none';
+                            keepBtn.style.display = 'none';
+
+                            const showBtn = createBtn('Show', 'eye', () => {
+                                firstEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                // Highlight
+                                const diffSpan = firstEl.querySelector('.inline-diff-container');
+                                if (diffSpan) {
+                                    diffSpan.style.boxShadow = '0 0 0 4px rgba(16, 185, 129, 0.2)';
+                                    setTimeout(() => diffSpan.style.boxShadow = 'none', 2000);
+                                }
+
+                                // Reveal Actions
+                                showBtn.style.display = 'none'; // Hide self? Or change to "Hide"? 
+                                // User asked: "Show 了之後按鈕變成 Keep 跟 Undo"
+                                undoBtn.style.display = 'inline-flex';
+                                keepBtn.style.display = 'inline-flex';
+                            });
+
+                            btnContainer.appendChild(showBtn);
+                            btnContainer.appendChild(undoBtn);
+                            btnContainer.appendChild(keepBtn);
+
+                            contentArea.appendChild(btnContainer);
+                            actionsDiv.appendChild(contentArea);
+
+                            const successMsg = addChatMessage('ai', 'Changes applied.');
+                            successMsg.appendChild(actionsDiv);
+                            lucide.createIcons();
+
+                        } else {
+                            // BLOCK EDIT: Use Wrapper with Accept/Reject
+
+                            // 1. Insert a marker before the first element
+                            const marker = document.createElement('span');
+                            marker.id = 'edit-marker-' + Date.now();
+                            const firstEl = targets[0];
+                            const parent = firstEl.parentNode;
+
+                            if (parent) {
+                                parent.insertBefore(marker, firstEl);
+
+                                // 2. Remove old elements
+                                targets.forEach(el => {
+                                    if (el.parentNode === parent) parent.removeChild(el);
+                                });
+
+                                // ... (Rest of Block Logic) ...
+                                const tempDiv = document.createElement('div');
+                                tempDiv.innerHTML = newContent;
+
+                                const fragment = document.createDocumentFragment();
+                                const newNodes = Array.from(tempDiv.childNodes);
+
+                                // Create a wrapper for the whole block to allow "Accept/Reject"
+                                const wrapperDiv = document.createElement('div');
+                                wrapperDiv.className = 'diff-block-wrapper highlight-pulse';
+                                // Clean style for the wrapper
+                                wrapperDiv.style.cssText = `
                                 border: 2px solid #e2e8f0;
                                 border-radius: 8px;
                                 margin: 16px 0;
@@ -1122,11 +1149,11 @@ Answer their question conversationally. Use Markdown for formatting.`;
                                 background-color: #f8fafc;
                                 transition: all 0.2s ease;
                             `;
-                            
-                            // Add Actions Header (Minimalist)
-                            const actionsHeader = document.createElement('div');
-                            actionsHeader.className = 'diff-actions-header';
-                            actionsHeader.style.cssText = `
+
+                                // Add Actions Header (Minimalist)
+                                const actionsHeader = document.createElement('div');
+                                actionsHeader.className = 'diff-actions-header';
+                                actionsHeader.style.cssText = `
                                 display: flex;
                                 gap: 4px;
                                 position: absolute;
@@ -1138,25 +1165,25 @@ Answer their question conversationally. Use Markdown for formatting.`;
                                 border-radius: 20px;
                                 box-shadow: 0 2px 4px rgba(0,0,0,0.05);
                             `;
-                            
-                            // Use SVG Icons for Check/X instead of Emoji
-                            actionsHeader.innerHTML = `
+
+                                // Use SVG Icons for Check/X instead of Emoji
+                                actionsHeader.innerHTML = `
                                 <button class="diff-btn accept" title="Accept" style="width:24px;height:24px;border-radius:50%;border:none;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#10b981;transition:background 0.2s;"><i data-lucide="check" style="width:14px;height:14px;"></i></button>
                                 <button class="diff-btn reject" title="Reject" style="width:24px;height:24px;border-radius:50%;border:none;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#ef4444;transition:background 0.2s;"><i data-lucide="x" style="width:14px;height:14px;"></i></button>
                             `;
-                            wrapperDiv.appendChild(actionsHeader);
-                            
-                            // Content Container
-                            const contentContainer = document.createElement('div');
-                            contentContainer.className = 'diff-content-new';
-                            contentContainer.style.padding = '16px';
-                            newNodes.forEach(node => contentContainer.appendChild(node));
-                            wrapperDiv.appendChild(contentContainer);
+                                wrapperDiv.appendChild(actionsHeader);
 
-                            // Hidden Original Container (for Diff View via Chat)
-                            const originalContainer = document.createElement('div');
-                            originalContainer.className = 'diff-content-original hidden';
-                            originalContainer.style.cssText = `
+                                // Content Container
+                                const contentContainer = document.createElement('div');
+                                contentContainer.className = 'diff-content-new';
+                                contentContainer.style.padding = '16px';
+                                newNodes.forEach(node => contentContainer.appendChild(node));
+                                wrapperDiv.appendChild(contentContainer);
+
+                                // Hidden Original Container (for Diff View via Chat)
+                                const originalContainer = document.createElement('div');
+                                originalContainer.className = 'diff-content-original hidden';
+                                originalContainer.style.cssText = `
                                 display: none;
                                 border-top: 1px dashed #cbd5e1;
                                 background-color: #fff1f2;
@@ -1164,23 +1191,23 @@ Answer their question conversationally. Use Markdown for formatting.`;
                                 color: #991b1b;
                                 font-size: 0.9em;
                             `;
-                            originalContainer.innerHTML = `<div style="margin-bottom:8px;font-size:0.8em;text-transform:uppercase;color:#ef4444;font-weight:bold;">Original</div>${targetHtml}`;
-                            wrapperDiv.appendChild(originalContainer);
-                            
-                            // Store original HTML for Reject
-                            wrapperDiv.dataset.originalHtml = targetHtml;
-                            
-                            parent.insertBefore(wrapperDiv, marker);
-                            parent.removeChild(marker);
-                            
-                            // Attach listeners
-                            attachBlockDiffListeners(wrapperDiv);
-                            
-                        // --- Chat UI Update (Light Style) ---
-                // Success Message with Actions
-                const actionsDiv = document.createElement('div');
-                        actionsDiv.className = 'chat-actions-container';
-                        actionsDiv.style.cssText = `
+                                originalContainer.innerHTML = `<div style="margin-bottom:8px;font-size:0.8em;text-transform:uppercase;color:#ef4444;font-weight:bold;">Original</div>${targetHtml}`;
+                                wrapperDiv.appendChild(originalContainer);
+
+                                // Store original HTML for Reject
+                                wrapperDiv.dataset.originalHtml = targetHtml;
+
+                                parent.insertBefore(wrapperDiv, marker);
+                                parent.removeChild(marker);
+
+                                // Attach listeners
+                                attachBlockDiffListeners(wrapperDiv);
+
+                                // --- Chat UI Update (Light Style) ---
+                                // Success Message with Actions
+                                const actionsDiv = document.createElement('div');
+                                actionsDiv.className = 'chat-actions-container';
+                                actionsDiv.style.cssText = `
                             margin-top: 12px;
                             background: #f8fafc;
                             border: 1px solid #e2e8f0;
@@ -1189,10 +1216,10 @@ Answer their question conversationally. Use Markdown for formatting.`;
                             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
                             font-size: 0.85em;
                         `;
-                        
-                        // Header Bar
-                        const headerBar = document.createElement('div');
-                        headerBar.style.cssText = `
+
+                                // Header Bar
+                                const headerBar = document.createElement('div');
+                                headerBar.style.cssText = `
                             padding: 8px 12px;
                             background: #f1f5f9;
                             border-bottom: 1px solid #e2e8f0;
@@ -1201,44 +1228,228 @@ Answer their question conversationally. Use Markdown for formatting.`;
                             align-items: center;
                             color: #64748b;
                         `;
-                        
-                        // File Info
-                        const fileInfo = document.createElement('div');
-                        fileInfo.innerHTML = `<i data-lucide="file-text" style="width:14px;height:14px;vertical-align:middle;margin-right:4px;"></i> ${currentFile.name}`;
-                        
-                        // Edit Stats (Fake stats for demo, or real if we calculate diff)
-                        const editStats = document.createElement('div');
-                        editStats.style.cssText = `font-size: 0.9em; color: #94a3b8;`;
-                        editStats.innerText = context.isInline ? 'Inline Edit' : 'Block Rewrite';
-                        
-                        headerBar.appendChild(fileInfo);
-                        headerBar.appendChild(editStats);
-                        actionsDiv.appendChild(headerBar);
-                        
-                        // Content Area (Buttons)
-                        const contentArea = document.createElement('div');
-                        contentArea.style.cssText = `
+
+                                // File Info
+                                const fileInfo = document.createElement('div');
+                                fileInfo.innerHTML = `<i data-lucide="file-text" style="width:14px;height:14px;vertical-align:middle;margin-right:4px;"></i> ${currentFile.name}`;
+
+                                // Edit Stats (Fake stats for demo, or real if we calculate diff)
+                                const editStats = document.createElement('div');
+                                editStats.style.cssText = `font-size: 0.9em; color: #94a3b8;`;
+                                editStats.innerText = ctx.isInline ? 'Inline Edit' : 'Block Rewrite';
+
+                                headerBar.appendChild(fileInfo);
+                                headerBar.appendChild(editStats);
+                                actionsDiv.appendChild(headerBar);
+
+                                // Content Area (Buttons)
+                                const contentArea = document.createElement('div');
+                                contentArea.style.cssText = `
                             padding: 12px;
                             display: flex;
                             gap: 8px;
                             justify-content: flex-end;
                             background: white;
                         `;
-                        
-                        // Buttons
+
+                                // Buttons
+                                const createBtn = (text, icon, action, colorClass = '') => {
+                                    const btn = document.createElement('button');
+                                    btn.innerHTML = `<i data-lucide="${icon}" style="width:14px;height:14px;margin-right:6px;"></i>${text}`;
+                                    let bg = 'white';
+                                    let color = '#475569';
+                                    let border = '#e2e8f0';
+
+                                    if (colorClass === 'primary') { bg = '#ecfdf5'; color = '#047857'; border = '#a7f3d0'; }
+                                    if (colorClass === 'danger') { bg = '#fef2f2'; color = '#b91c1c'; border = '#fecaca'; }
+
+                                    // Flex 1 to fill width
+                                    btn.style.cssText = `flex: 1; display:inline-flex; align-items:center; justify-content:center; padding:8px 12px; border-radius:6px; border:1px solid ${border}; background:${bg}; color:${color}; font-size:0.9em; cursor:pointer; transition:all 0.2s;`;
+
+                                    btn.addEventListener('mouseenter', () => btn.style.filter = 'brightness(0.95)');
+                                    btn.addEventListener('mouseleave', () => btn.style.filter = 'none');
+                                    btn.addEventListener('click', action);
+                                    return btn;
+                                };
+
+                                const btnContainer = document.createElement('div');
+                                btnContainer.style.display = 'flex';
+                                btnContainer.style.gap = '8px';
+                                btnContainer.style.width = '100%'; // Full width container
+
+                                // Undo (Reject)
+                                const undoBtn = createBtn('Undo', 'undo-2', () => {
+                                    // Trigger Reject on the wrapper
+                                    const rejectBtn = wrapperDiv.querySelector('.reject');
+                                    if (rejectBtn) rejectBtn.click();
+                                    actionsDiv.remove();
+                                    addChatMessage('ai', 'Changes undone.');
+                                }, 'danger');
+
+                                // Keep (Accept)
+                                const keepBtn = createBtn('Keep', 'check', () => {
+                                    const acceptBtn = wrapperDiv.querySelector('.accept');
+                                    if (acceptBtn) acceptBtn.click();
+                                    actionsDiv.remove();
+                                    addChatMessage('ai', 'Changes accepted.');
+                                }, 'primary');
+
+                                // Initially hidden
+                                undoBtn.style.display = 'none';
+                                keepBtn.style.display = 'none';
+
+                                // Show (Show Changes)
+                                const showBtn = createBtn('Show', 'eye', () => {
+                                    wrapperDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    wrapperDiv.classList.add('highlight-pulse');
+                                    setTimeout(() => wrapperDiv.classList.remove('highlight-pulse'), 2000);
+
+                                    const original = wrapperDiv.querySelector('.diff-content-original');
+                                    if (original) {
+                                        // Always show original when clicking Show
+                                        original.style.display = 'block';
+
+                                        // Reveal Actions, Hide Show button
+                                        showBtn.style.display = 'none';
+                                        undoBtn.style.display = 'inline-flex';
+                                        keepBtn.style.display = 'inline-flex';
+                                    }
+                                });
+
+                                btnContainer.appendChild(showBtn);
+                                btnContainer.appendChild(undoBtn);
+                                btnContainer.appendChild(keepBtn);
+
+                                contentArea.appendChild(btnContainer);
+
+                                actionsDiv.appendChild(contentArea);
+
+                                const successMsg = addChatMessage('ai', 'Changes applied.');
+                                successMsg.appendChild(actionsDiv);
+                                lucide.createIcons();
+                            } // end block edit
+                        } // end if (targets.length > 0)
+                    } else {
+                        // Full document diff + actions (same UX as other edits)
+                        const oldHtml = editor.innerHTML;
+
+                        // Reuse the GLOBAL diff rendering (red deletions + green additions, only where changed)
+                        const oldDiv = document.createElement('div');
+                        oldDiv.innerHTML = oldHtml;
+                        const newDiv = document.createElement('div');
+                        newDiv.innerHTML = newContent;
+
+                        const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        const tokenizeForDiff = (text) => {
+                            const re = /(\s+|\[\d+\]|[a-zA-Z0-9]+|[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]|[^\s])/gu;
+                            return text.match(re) || [];
+                        };
+                        const diffWords = (a, b) => {
+                            const aT = tokenizeForDiff(a);
+                            const bT = tokenizeForDiff(b);
+                            const m = aT.length, n = bT.length;
+                            const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+                            for (let i = m - 1; i >= 0; i--) {
+                                for (let j = n - 1; j >= 0; j--) {
+                                    dp[i][j] = aT[i] === bT[j] ? 1 + dp[i + 1][j + 1] : Math.max(dp[i + 1][j], dp[i][j + 1]);
+                                }
+                            }
+                            const ops = [];
+                            let i = 0, j = 0;
+                            while (i < m && j < n) {
+                                if (aT[i] === bT[j]) {
+                                    ops.push({ type: 'same', text: aT[i] });
+                                    i++; j++;
+                                } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+                                    ops.push({ type: 'del', text: aT[i++] });
+                                } else {
+                                    ops.push({ type: 'add', text: bT[j++] });
+                                }
+                            }
+                            while (i < m) ops.push({ type: 'del', text: aT[i++] });
+                            while (j < n) ops.push({ type: 'add', text: bT[j++] });
+                            const isWhitespace = (t) => /^\s+$/.test(t);
+                            let html = '';
+                            let hasChange = false;
+                            let k = 0;
+                            while (k < ops.length) {
+                                const op = ops[k];
+                                if (op.type === 'same') {
+                                    html += esc(op.text);
+                                    k++;
+                                    continue;
+                                }
+                                let delText = '';
+                                let addText = '';
+                                while (k < ops.length && ops[k].type === 'del') { delText += ops[k].text; k++; }
+                                while (k < ops.length && ops[k].type === 'add') { addText += ops[k].text; k++; }
+                                if (isWhitespace(delText) && isWhitespace(addText)) {
+                                    html += esc(delText + addText);
+                                    continue;
+                                }
+                                if (delText && !isWhitespace(delText)) {
+                                    html += `<span class="global-del" style="background:#fee2e2;color:#b91c1c;text-decoration:line-through;">${esc(delText)}</span>`;
+                                    hasChange = true;
+                                } else if (delText) {
+                                    html += esc(delText);
+                                }
+                                if (addText && !isWhitespace(addText)) {
+                                    html += `<span class="global-add" style="background:#dcfce7;color:#047857;">${esc(addText)}</span>`;
+                                    hasChange = true;
+                                } else if (addText) {
+                                    html += esc(addText);
+                                }
+                            }
+                            return { html, hasChange };
+                        };
+
+                        const oldElements = Array.from(oldDiv.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6, li'));
+                        const newElements = Array.from(newDiv.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6, li'));
+                        let changedCount = 0;
+                        const pairCount = Math.min(oldElements.length, newElements.length);
+                        for (let i = 0; i < pairCount; i++) {
+                            const { html, hasChange } = diffWords(oldElements[i].innerText, newElements[i].innerText);
+                            if (hasChange) {
+                                newElements[i].innerHTML = html;
+                                changedCount++;
+                            }
+                        }
+                        for (let i = pairCount; i < newElements.length; i++) {
+                            newElements[i].innerHTML = `<span class="global-add" style="background:#dcfce7;color:#047857;">${esc(newElements[i].innerText)}</span>`;
+                            changedCount++;
+                        }
+                        for (let i = pairCount; i < oldElements.length; i++) {
+                            const oe = oldElements[i];
+                            const delBlock = document.createElement(oe.tagName || 'div');
+                            delBlock.innerHTML = `<span class="global-del" style="background:#fee2e2;color:#b91c1c;text-decoration:line-through;">${esc(oe.innerText)}</span>`;
+                            newDiv.appendChild(delBlock);
+                            changedCount++;
+                        }
+
+                        editor.innerHTML = newDiv.innerHTML;
+
+                        // Chat UI (Show -> Undo/Keep)
+                        const actionsDiv = document.createElement('div');
+                        actionsDiv.className = 'chat-actions-container';
+                        actionsDiv.style.cssText = `margin-top:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; font-family:monospace; font-size:0.85em;`;
+
+                        const headerBar = document.createElement('div');
+                        headerBar.style.cssText = `padding:8px 12px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; color:#64748b;`;
+                        headerBar.innerHTML = `<div>Document Edit: ${changedCount} changes</div>`;
+                        actionsDiv.appendChild(headerBar);
+
+                        const contentArea = document.createElement('div');
+                        contentArea.style.cssText = `padding:12px; display:flex; gap:8px; background:white;`;
+
                         const createBtn = (text, icon, action, colorClass = '') => {
                             const btn = document.createElement('button');
                             btn.innerHTML = `<i data-lucide="${icon}" style="width:14px;height:14px;margin-right:6px;"></i>${text}`;
                             let bg = 'white';
                             let color = '#475569';
                             let border = '#e2e8f0';
-                            
                             if (colorClass === 'primary') { bg = '#ecfdf5'; color = '#047857'; border = '#a7f3d0'; }
                             if (colorClass === 'danger') { bg = '#fef2f2'; color = '#b91c1c'; border = '#fecaca'; }
-                            
-                            // Flex 1 to fill width
                             btn.style.cssText = `flex: 1; display:inline-flex; align-items:center; justify-content:center; padding:8px 12px; border-radius:6px; border:1px solid ${border}; background:${bg}; color:${color}; font-size:0.9em; cursor:pointer; transition:all 0.2s;`;
-                            
                             btn.addEventListener('mouseenter', () => btn.style.filter = 'brightness(0.95)');
                             btn.addEventListener('mouseleave', () => btn.style.filter = 'none');
                             btn.addEventListener('click', action);
@@ -1248,233 +1459,49 @@ Answer their question conversationally. Use Markdown for formatting.`;
                         const btnContainer = document.createElement('div');
                         btnContainer.style.display = 'flex';
                         btnContainer.style.gap = '8px';
-                        btnContainer.style.width = '100%'; // Full width container
+                        btnContainer.style.width = '100%';
 
-                        // Undo (Reject)
                         const undoBtn = createBtn('Undo', 'undo-2', () => {
-                            // Trigger Reject on the wrapper
-                            const rejectBtn = wrapperDiv.querySelector('.reject');
-                            if(rejectBtn) rejectBtn.click();
-                            actionsDiv.remove(); 
+                            editor.innerHTML = oldHtml;
+                            actionsDiv.remove();
                             addChatMessage('ai', 'Changes undone.');
                         }, 'danger');
-                        
-                        // Keep (Accept)
+
                         const keepBtn = createBtn('Keep', 'check', () => {
-                            const acceptBtn = wrapperDiv.querySelector('.accept');
-                            if(acceptBtn) acceptBtn.click();
+                            editor.querySelectorAll('.global-del').forEach(el => el.remove());
+                            editor.querySelectorAll('.global-add').forEach(el => el.replaceWith(document.createTextNode(el.textContent)));
                             actionsDiv.remove();
                             addChatMessage('ai', 'Changes accepted.');
                         }, 'primary');
 
-                        // Initially hidden
                         undoBtn.style.display = 'none';
                         keepBtn.style.display = 'none';
 
-                        // Show (Show Changes)
                         const showBtn = createBtn('Show', 'eye', () => {
-                            wrapperDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            wrapperDiv.classList.add('highlight-pulse');
-                            setTimeout(() => wrapperDiv.classList.remove('highlight-pulse'), 2000);
-                            
-                            const original = wrapperDiv.querySelector('.diff-content-original');
-                            if (original) {
-                                // Always show original when clicking Show
-                                original.style.display = 'block';
-                                
-                                // Reveal Actions, Hide Show button
-                                showBtn.style.display = 'none';
-                                undoBtn.style.display = 'inline-flex';
-                                keepBtn.style.display = 'inline-flex';
+                            const firstChange = editor.querySelector('.global-del, .global-add');
+                            if (firstChange) {
+                                firstChange.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                firstChange.style.boxShadow = '0 0 0 4px rgba(100, 116, 139, 0.25)';
+                                setTimeout(() => firstChange.style.boxShadow = 'none', 2000);
                             }
+                            showBtn.style.display = 'none';
+                            undoBtn.style.display = 'inline-flex';
+                            keepBtn.style.display = 'inline-flex';
                         });
-                        
+
                         btnContainer.appendChild(showBtn);
                         btnContainer.appendChild(undoBtn);
                         btnContainer.appendChild(keepBtn);
-                        
+
                         contentArea.appendChild(btnContainer);
-                        
                         actionsDiv.appendChild(contentArea);
-                        
-                        const successMsg = addChatMessage('ai', 'Changes applied.');
+
+                        const successMsg = addChatMessage('ai', `Changes applied.`);
                         successMsg.appendChild(actionsDiv);
                         lucide.createIcons();
-                        } // end block edit
-                    } // end if (targets.length > 0)
-            } else {
-                    // Full document diff + actions (same UX as other edits)
-                    const oldHtml = editor.innerHTML;
-
-                    // Reuse the GLOBAL diff rendering (red deletions + green additions, only where changed)
-                    const oldDiv = document.createElement('div');
-                    oldDiv.innerHTML = oldHtml;
-                    const newDiv = document.createElement('div');
-                    newDiv.innerHTML = newContent;
-
-                    const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                    const tokenizeForDiff = (text) => {
-                        const re = /(\s+|\[\d+\]|[a-zA-Z0-9]+|[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]|[^\s])/gu;
-                        return text.match(re) || [];
-                    };
-                    const diffWords = (a, b) => {
-                        const aT = tokenizeForDiff(a);
-                        const bT = tokenizeForDiff(b);
-                        const m = aT.length, n = bT.length;
-                        const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
-                        for (let i = m - 1; i >= 0; i--) {
-                            for (let j = n - 1; j >= 0; j--) {
-                                dp[i][j] = aT[i] === bT[j] ? 1 + dp[i + 1][j + 1] : Math.max(dp[i + 1][j], dp[i][j + 1]);
-                            }
-                        }
-                        const ops = [];
-                        let i = 0, j = 0;
-                        while (i < m && j < n) {
-                            if (aT[i] === bT[j]) {
-                                ops.push({ type: 'same', text: aT[i] });
-                                i++; j++;
-                            } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-                                ops.push({ type: 'del', text: aT[i++] });
-                            } else {
-                                ops.push({ type: 'add', text: bT[j++] });
-                            }
-                        }
-                        while (i < m) ops.push({ type: 'del', text: aT[i++] });
-                        while (j < n) ops.push({ type: 'add', text: bT[j++] });
-                        const isWhitespace = (t) => /^\s+$/.test(t);
-                        let html = '';
-                        let hasChange = false;
-                        let k = 0;
-                        while (k < ops.length) {
-                            const op = ops[k];
-                            if (op.type === 'same') {
-                                html += esc(op.text);
-                                k++;
-                                continue;
-                            }
-                            let delText = '';
-                            let addText = '';
-                            while (k < ops.length && ops[k].type === 'del') { delText += ops[k].text; k++; }
-                            while (k < ops.length && ops[k].type === 'add') { addText += ops[k].text; k++; }
-                            if (isWhitespace(delText) && isWhitespace(addText)) {
-                                html += esc(delText + addText);
-                                continue;
-                            }
-                            if (delText && !isWhitespace(delText)) {
-                                html += `<span class="global-del" style="background:#fee2e2;color:#b91c1c;text-decoration:line-through;">${esc(delText)}</span>`;
-                                hasChange = true;
-                            } else if (delText) {
-                                html += esc(delText);
-                            }
-                            if (addText && !isWhitespace(addText)) {
-                                html += `<span class="global-add" style="background:#dcfce7;color:#047857;">${esc(addText)}</span>`;
-                                hasChange = true;
-                            } else if (addText) {
-                                html += esc(addText);
-                            }
-                        }
-                        return { html, hasChange };
-                    };
-
-                    const oldElements = Array.from(oldDiv.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6, li'));
-                    const newElements = Array.from(newDiv.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6, li'));
-                    let changedCount = 0;
-                    const pairCount = Math.min(oldElements.length, newElements.length);
-                    for (let i = 0; i < pairCount; i++) {
-                        const { html, hasChange } = diffWords(oldElements[i].innerText, newElements[i].innerText);
-                        if (hasChange) {
-                            newElements[i].innerHTML = html;
-                            changedCount++;
-                        }
                     }
-                    for (let i = pairCount; i < newElements.length; i++) {
-                        newElements[i].innerHTML = `<span class="global-add" style="background:#dcfce7;color:#047857;">${esc(newElements[i].innerText)}</span>`;
-                        changedCount++;
-                    }
-                    for (let i = pairCount; i < oldElements.length; i++) {
-                        const oe = oldElements[i];
-                        const delBlock = document.createElement(oe.tagName || 'div');
-                        delBlock.innerHTML = `<span class="global-del" style="background:#fee2e2;color:#b91c1c;text-decoration:line-through;">${esc(oe.innerText)}</span>`;
-                        newDiv.appendChild(delBlock);
-                        changedCount++;
-                    }
-
-                    editor.innerHTML = newDiv.innerHTML;
-
-                    // Chat UI (Show -> Undo/Keep)
-                    const actionsDiv = document.createElement('div');
-                    actionsDiv.className = 'chat-actions-container';
-                    actionsDiv.style.cssText = `margin-top:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; font-family:monospace; font-size:0.85em;`;
-
-                    const headerBar = document.createElement('div');
-                    headerBar.style.cssText = `padding:8px 12px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; color:#64748b;`;
-                    headerBar.innerHTML = `<div>Document Edit: ${changedCount} changes</div>`;
-                    actionsDiv.appendChild(headerBar);
-
-                    const contentArea = document.createElement('div');
-                    contentArea.style.cssText = `padding:12px; display:flex; gap:8px; background:white;`;
-
-                    const createBtn = (text, icon, action, colorClass = '') => {
-                        const btn = document.createElement('button');
-                        btn.innerHTML = `<i data-lucide="${icon}" style="width:14px;height:14px;margin-right:6px;"></i>${text}`;
-                        let bg = 'white';
-                        let color = '#475569';
-                        let border = '#e2e8f0';
-                        if (colorClass === 'primary') { bg = '#ecfdf5'; color = '#047857'; border = '#a7f3d0'; }
-                        if (colorClass === 'danger') { bg = '#fef2f2'; color = '#b91c1c'; border = '#fecaca'; }
-                        btn.style.cssText = `flex: 1; display:inline-flex; align-items:center; justify-content:center; padding:8px 12px; border-radius:6px; border:1px solid ${border}; background:${bg}; color:${color}; font-size:0.9em; cursor:pointer; transition:all 0.2s;`;
-                        btn.addEventListener('mouseenter', () => btn.style.filter = 'brightness(0.95)');
-                        btn.addEventListener('mouseleave', () => btn.style.filter = 'none');
-                        btn.addEventListener('click', action);
-                        return btn;
-                    };
-
-                    const btnContainer = document.createElement('div');
-                    btnContainer.style.display = 'flex';
-                    btnContainer.style.gap = '8px';
-                    btnContainer.style.width = '100%';
-
-                    const undoBtn = createBtn('Undo', 'undo-2', () => {
-                        editor.innerHTML = oldHtml;
-                        actionsDiv.remove();
-                        addChatMessage('ai', 'Changes undone.');
-                    }, 'danger');
-
-                    const keepBtn = createBtn('Keep', 'check', () => {
-                        editor.querySelectorAll('.global-del').forEach(el => el.remove());
-                        editor.querySelectorAll('.global-add').forEach(el => el.replaceWith(document.createTextNode(el.textContent)));
-                        actionsDiv.remove();
-                        addChatMessage('ai', 'Changes accepted.');
-                    }, 'primary');
-
-                    undoBtn.style.display = 'none';
-                    keepBtn.style.display = 'none';
-
-                    const showBtn = createBtn('Show', 'eye', () => {
-                        const firstChange = editor.querySelector('.global-del, .global-add');
-                        if (firstChange) {
-                            firstChange.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            firstChange.style.boxShadow = '0 0 0 4px rgba(100, 116, 139, 0.25)';
-                            setTimeout(() => firstChange.style.boxShadow = 'none', 2000);
-                        }
-                        showBtn.style.display = 'none';
-                        undoBtn.style.display = 'inline-flex';
-                        keepBtn.style.display = 'inline-flex';
-                    });
-
-                    btnContainer.appendChild(showBtn);
-                    btnContainer.appendChild(undoBtn);
-                    btnContainer.appendChild(keepBtn);
-
-                    contentArea.appendChild(btnContainer);
-                    actionsDiv.appendChild(contentArea);
-
-                    const successMsg = addChatMessage('ai', `Changes applied.`);
-                    successMsg.appendChild(actionsDiv);
-                    lucide.createIcons();
-                }
-            } // end if (newContent && newContent !== targetHtml)
-        } // end for contexts
+                } // end if (newContent && newContent !== targetHtml)
+            } // end for contexts
 
             if (appliedCount === 0) {
                 updateProgress('Step 4', 'No changes generated.');
@@ -1494,19 +1521,19 @@ Answer their question conversationally. Use Markdown for formatting.`;
 
         // Note: Show Diff button is now in Chat, not in wrapper header.
         // We handle hover effects for clean UI
-        
+
         if (acceptBtn) {
             acceptBtn.addEventListener('mouseenter', () => acceptBtn.style.backgroundColor = '#ecfdf5');
             acceptBtn.addEventListener('mouseleave', () => acceptBtn.style.backgroundColor = 'transparent');
-            
+
             acceptBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 // Unwrap
                 const header = wrapper.querySelector('.diff-actions-header');
-                if(header) header.remove();
-                
+                if (header) header.remove();
+
                 const original = wrapper.querySelector('.diff-content-original');
-                if(original) original.remove();
+                if (original) original.remove();
 
                 const contentNew = wrapper.querySelector('.diff-content-new');
                 if (contentNew) {
@@ -1523,7 +1550,7 @@ Answer their question conversationally. Use Markdown for formatting.`;
         if (rejectBtn) {
             rejectBtn.addEventListener('mouseenter', () => rejectBtn.style.backgroundColor = '#fef2f2');
             rejectBtn.addEventListener('mouseleave', () => rejectBtn.style.backgroundColor = 'transparent');
-            
+
             rejectBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const originalHtml = wrapper.dataset.originalHtml;
@@ -1561,14 +1588,56 @@ ${guidelines}
         console.log("Gemini Prompt (Rewrite):\n" + prompt);
         const response = await callGeminiAPI(prompt, onLog);
         console.log("Gemini Response (Rewrite):\n" + response);
-        
+
         // Clean up markdown code blocks if Gemini adds them
         let clean = response.trim();
         if (clean.startsWith('```html')) clean = clean.substring(7);
         if (clean.startsWith('```')) clean = clean.substring(3);
         if (clean.endsWith('```')) clean = clean.slice(0, -3);
-        
+
         return clean.trim();
+    }
+
+    async function generateSearchAndPatch(instruction, fullContext, fileName, onLog) {
+        const prompt = `
+You are a Precision Editing Engine.
+Instruction: "${instruction}"
+Context File: "${fileName}"
+
+Original Text (Full Document):
+${fullContext}
+
+TASK:
+1. Locate the SPECIFIC section in the "Original Text" that needs to be modified based on the Instruction.
+2. Extract the EXACT HTML of that section to be replaced ("target_to_replace").
+3. Generate the NEW HTML for that section ("replacement_content").
+
+CRITICAL RULES:
+- "target_to_replace" must be a UNIQUE and EXACT substring from the Original Text.
+- Do NOT rewrite the entire document. Focus only on the part relevant to the instruction.
+- If the instruction implies adding new content, find the appropriate adjacent element as the target.
+
+OUTPUT FORMAT (JSON ONLY):
+{
+  "target_to_replace": "exact substring from original text",
+  "replacement_content": "new replacement html"
+}
+`;
+        console.log("Gemini Prompt (Search & Patch):\n" + prompt);
+        const response = await callGeminiAPI(prompt, onLog);
+        console.log("Gemini Response (Search & Patch):\n" + response);
+
+        try {
+            // Clean up code blocks
+            let clean = response.trim();
+            if (clean.startsWith('\`\`\`json')) clean = clean.substring(7);
+            if (clean.startsWith('\`\`\`')) clean = clean.substring(3);
+            if (clean.endsWith('\`\`\`')) clean = clean.slice(0, -3);
+            return JSON.parse(clean);
+        } catch (e) {
+            console.error("Failed to parse Search & Patch JSON", e);
+            throw new Error("AI failed to generate a valid patch format.");
+        }
     }
 
 
@@ -1632,7 +1701,7 @@ ${guidelines}
         // TF-IDF / Cosine Similarity Implementation
         // Expanded selector to catch more text containers and specific block elements
         const elements = Array.from(editor.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre, div, span, article, section, td, th'));
-        
+
         if (elements.length === 0) return null;
 
         // Filter out elements that are just containers for other block elements we already selected
@@ -1640,13 +1709,13 @@ ${guidelines}
         const contentElements = elements.filter(el => {
             // If it has block children, it might be a container. 
             // A simple heuristic: if it has direct text nodes with content, keep it.
-            const hasDirectText = Array.from(el.childNodes).some(node => 
+            const hasDirectText = Array.from(el.childNodes).some(node =>
                 node.nodeType === Node.TEXT_NODE && node.textContent.trim().length > 0
             );
             // If it's a block element like div/section, we only want it if it has direct text.
             // For p, h1-h6, li, they are usually content holders.
-            const isContentBlock = ['P','H1','H2','H3','H4','H5','H6','LI','BLOCKQUOTE','PRE','TD','TH'].includes(el.tagName);
-            
+            const isContentBlock = ['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'PRE', 'TD', 'TH'].includes(el.tagName);
+
             return isContentBlock || hasDirectText;
         });
 
@@ -1656,17 +1725,17 @@ ${guidelines}
         const tokenize = (text) => {
             const str = text.toLowerCase();
             const tokens = [];
-            
+
             // 1. Extract Latin/Number words
             const words = str.match(/[a-z0-9]+/g) || [];
             tokens.push(...words);
-            
+
             // 2. Extract CJK characters (as individual tokens)
             // This treats each Chinese/Japanese/Korean character as a separate token, 
             // which works better for cosine similarity in short snippets than full sentence tokens.
             const cjk = str.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu) || [];
             tokens.push(...cjk);
-            
+
             return tokens;
         };
 
@@ -1725,7 +1794,7 @@ ${guidelines}
                 if (keywords.length > 4) {
                     const halfQuery = keywords.substring(0, Math.ceil(keywords.length / 2));
                     if (text.toLowerCase().includes(halfQuery.toLowerCase())) {
-                         similarity += 0.5;
+                        similarity += 0.5;
                     }
                 }
             }
@@ -1757,7 +1826,7 @@ ${guidelines}
         function buildContext(bestMatchEl, scopeMode) {
             // IF INLINE SCOPE: Do NOT expand. Return just the single element.
             if (scopeMode === 'inline') {
-            return {
+                return {
                     elements: [bestMatchEl],
                     element: bestMatchEl,
                     fullHtml: bestMatchEl.outerHTML,
@@ -1767,24 +1836,24 @@ ${guidelines}
             }
 
             // Context Expansion: Smart Block Detection
-            
+
             let contextElements = [bestMatchEl];
-            
+
             // Helper to check if an element acts as a header
             const isHeader = (el) => {
                 const tag = el.tagName;
-                if (['H1','H2','H3','H4','H5','H6'].includes(tag)) return true;
-                
+                if (['H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(tag)) return true;
+
                 // Heuristic: Short bold text or just short text followed by content might be a header
                 const text = el.innerText.trim();
-                
+
                 // Refined Header Detection:
                 // 1. Very short text (< 20 chars)
                 // 2. Must NOT look like a list item (e.g. "1. xxx" or "• xxx") - hard to detect generally
                 // 3. If it's a DIV, it's ambiguous. 
-                
+
                 if (text.length > 0 && text.length < 20) {
-                     return true;
+                    return true;
                 }
                 return false;
             };
@@ -1795,7 +1864,7 @@ ${guidelines}
 
             const matchIsHeader = isHeader(bestMatchEl);
             let current = bestMatchEl;
-            
+
             // BACKWARD EXPANSION
             // ... (keep existing) ...
             if (!matchIsHeader) {
@@ -1820,57 +1889,57 @@ ${guidelines}
             // FORWARD EXPANSION
             // If header, capture until next header.
             // If content, capture neighbors.
-            
+
             current = contextElements[contextElements.length - 1]; // Start from end of current selection
-            
+
             // Safety limit
             // We reduced max siblings to avoid grabbing too much unrelated content if header detection fails slightly
-            const MAX_SIBLINGS = matchIsHeader ? 60 : 15; 
-            
+            const MAX_SIBLINGS = matchIsHeader ? 60 : 15;
+
             for (let i = 0; i < MAX_SIBLINGS; i++) {
                 if (current.nextElementSibling) {
                     const next = current.nextElementSibling;
                     const nextIsHeader = isHeader(next);
-                    
+
                     // Logic to detect "Section Break" vs "List Item"
-                    
+
                     // Stop if we hit a Strong Header (H1-H6)
-                    if (['H1','H2','H3','H4','H5','H6'].includes(next.tagName) && i > 0) break;
+                    if (['H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(next.tagName) && i > 0) break;
 
                     // For "Weak Headers" (Short DIVs):
                     // If we have collected enough items (e.g. > 10), and we see a potential header,
                     // we need to decide if it's a list item or a new section.
-                    
+
                     // Heuristic: If the CURRENT item was also a "Weak Header" (short text), 
                     // and the NEXT item is also a "Weak Header", it is likely a LIST. Keep going.
                     const currentIsWeakHeader = current.innerText.trim().length < 30;
-                    
+
                     if (nextIsHeader) {
                         // If we have a sequence of short items, keep going.
                         // Only stop if we break the pattern? 
                         // Actually, "Section Headers" are usually followed by "Long Content" or "Another List".
-                        
+
                         // Let's use a simple buffer: allow up to 20 items in a list.
                         if (i > 20) {
                             break;
                         }
-                    } 
-                    
+                    }
+
                     // If we see a "Long Paragraph" (> 100 chars), it's definitely content. Keep it.
                     // If we see a "Medium Paragraph" after a list, it might be the start of new section's text?
                     // No, usually Text follows Header.
-                    
+
                     current = next;
                     contextElements.push(current);
                 } else {
                     break;
                 }
             }
-            
+
             // Combine HTML and Text
             const fullHtml = contextElements.map(el => el.outerHTML).join('\n');
             const snippet = contextElements.map(el => el.innerText).join('\n');
-            
+
             return {
                 elements: contextElements, // Array of specific elements to replace
                 element: bestMatchEl.parentElement, // Parent scope (kept for fallback)
@@ -1934,11 +2003,11 @@ CRITICAL:
 
 BEGIN JSON OUTPUT:
 `;
-        
+
         console.log("Gemini Prompt:\n" + prompt);
 
         const response = await callGeminiAPI(prompt, onLog);
-        
+
         console.log("Gemini Response:\n" + response);
 
         try {
@@ -2044,7 +2113,7 @@ BEGIN JSON OUTPUT:
                 const newContent = await generateRewrite(instruction, selectedText, currentFile.name, 'inline', (msg) => {
                     console.log("Inline Edit Log:", msg);
                 });
-                
+
                 // Apply directly to the selection
                 if (currentSelectionRange) {
                     const selection = window.getSelection();
@@ -2052,7 +2121,7 @@ BEGIN JSON OUTPUT:
                     selection.addRange(currentSelectionRange);
                     document.execCommand('insertHTML', false, newContent);
                 }
-                
+
                 closeInlineModal();
             } catch (error) {
                 alert('Failed: ' + error.message);
